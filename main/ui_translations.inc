@@ -101,3 +101,8 @@
 {"已连接", "Connected"},
 {"连接中", "Connecting"},
 {"等待 USB", "Waiting for USB"},
+{"该活动身体了", "Time to move"},
+{"别一直盯着电脑，起身走两步", "Stop staring at the screen. Stand up and walk a bit"},
+{"触摸屏幕继续", "Tap the screen to continue"},
+{"积分", "Credits"},
+{"WorkBuddy 积分", "WorkBuddy credits"},
