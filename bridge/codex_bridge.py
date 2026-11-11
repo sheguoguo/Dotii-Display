@@ -36,6 +36,7 @@ from bluetooth_bridge import BluetoothBridge
 from firmware_flasher import FirmwareFlasher
 from connection_settings import ConnectionSettings
 from usb_bridge import UsbBridge
+import workbuddy_credits
 from localization import localize_admin
 from platforms import current_platform
 from runtime_paths import (
@@ -1062,6 +1063,103 @@ class RuntimeStatus:
 
 
 
+def apply_workbuddy_to_codex(codex: dict[str, Any], credits: dict[str, Any]) -> None:
+    """把 WorkBuddy 积分映射到设备只认的 codex 用量字段。
+
+    固件对 schema v1 的约束是 ``weekly_remaining_percent`` 必须是 0..100 的整数，
+    所以积分被表示成"相对月度额度的剩余比例"，绝对积分值放进 ``weekly_tokens``。
+    积分不可用时**不改动**原字段并标记 unavailable，让设备显示 ``--`` 而不是 0。
+    """
+    if not credits.get("available"):
+        codex["plan_type"] = "workbuddy"
+        codex["rate_limit_reached"] = ""
+        codex["weekly_tokens_available"] = False
+        codex["five_hour_available"] = False
+        return
+
+    total = float(credits.get("total") or 0.0)
+    monthly_size = float(credits.get("monthly_size") or 0.0)
+    monthly_remain = float(credits.get("monthly_remain") or 0.0)
+
+    # 剩余比例优先按月度额度算（界面语义是"这个月还能用多少"）；
+    # 没有月度包时退化为 100%（一次性包不构成周期额度）。
+    if monthly_size > 0:
+        ratio = monthly_remain / monthly_size
+    else:
+        ratio = 1.0
+    percent = int(round(max(0.0, min(1.0, ratio)) * 100))
+
+    codex["weekly_available"] = True
+    codex["weekly_remaining_percent"] = percent
+    codex["weekly_used_percent"] = 100 - percent
+    codex["weekly_tokens_available"] = True
+    codex["weekly_tokens"] = int(round(total))
+    codex["weekly_tokens_as_of"] = time.strftime("%H:%M", time.localtime(
+        int(credits.get("updated_at_epoch") or time.time())
+    ))
+    codex["plan_type"] = "workbuddy"
+    codex["rate_limit_reached"] = ""
+    expiry = int(credits.get("nearest_expiry_epoch") or 0)
+    codex["reset_date"] = time.strftime("%m-%d %H:%M", time.localtime(expiry)) if expiry else ""
+    # 五小时窗口对积分没有意义，关掉以免主屏显示误导性的副弧。
+    codex["five_hour_available"] = False
+    codex["five_hour_remaining_percent"] = 0
+    codex["five_hour_reset_date"] = ""
+
+
+class WorkBuddyCredits:
+    """带缓存的 WorkBuddy 积分读取。
+
+    设备每 5 秒拉一次快照，而腾讯计费接口不该被这样打。因此这里缓存读数：
+    超过 ``refresh_seconds`` 才真正发一次请求，且失败时继续沿用上次成功值
+    （并把 stale 标记透出去，界面显示 ``--`` 而不是伪造 0）。
+    """
+
+    def __init__(self, refresh_seconds: float = 60.0) -> None:
+        self.refresh_seconds = refresh_seconds
+        self.lock = threading.Lock()
+        self.reading: Any = None
+        self.updated_at = 0.0
+        self.error = ""
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            now = time.time()
+            if now - self.updated_at >= self.refresh_seconds:
+                self._refresh_locked()
+            reading = self.reading
+            updated = self.updated_at
+            error = self.error
+        if reading is None:
+            return {"available": False, "error": error, "updated_at_epoch": int(updated)}
+        return {
+            "available": True,
+            "error": error,
+            "total": round(reading.total, 2),
+            "monthly_remain": round(reading.monthly_remain, 2),
+            "monthly_size": round(reading.monthly_size, 2),
+            "package_count": len(reading.packages),
+            "nearest_expiry_epoch": (
+                int(reading.nearest_expiry_ms / 1000) if reading.nearest_expiry_ms else 0
+            ),
+            "updated_at_epoch": int(updated),
+        }
+
+    def _refresh_locked(self) -> None:
+        self.updated_at = time.time()
+        try:
+            reading = workbuddy_credits.read_best_credits("cn")
+        except Exception as error:  # 采集失败绝不能让快照接口 500
+            self.error = type(error).__name__
+            logging.warning("WorkBuddy 积分采集异常：%s", type(error).__name__)
+            return
+        if reading is None:
+            self.error = "unavailable"
+            return
+        self.reading = reading
+        self.error = ""
+
+
 class BridgeHandler(BaseHTTPRequestHandler):
     server_version = f"StateDisplayBridge/{APP_VERSION}"
 
@@ -1578,6 +1676,7 @@ class BridgeServer(ThreadingHTTPServer):
         self.usb = UsbBridge(self)
         self.wifi_seen = {}
         self.wifi_data_seen = {}
+        self.workbuddy = WorkBuddyCredits()
 
     def device_url(self):
         return f"http://{local_ipv4()}:{self.server_port}/api/v1/snapshot"
@@ -1589,6 +1688,12 @@ class BridgeServer(ThreadingHTTPServer):
         custom.update(self.assets.render_info())
         snapshot["custom"] = custom
         snapshot["bambu"] = self.bambu.snapshot()
+        # 本定制版把主屏的"用量"从 Codex 换成 WorkBuddy 积分。
+        # 设备侧只认 schema v1 的既有字段，因此这里把积分映射到同一组字段：
+        # weekly_remaining_percent 表示积分剩余比例，weekly_tokens 表示剩余积分值。
+        credits = self.workbuddy.snapshot()
+        snapshot["workbuddy"] = credits
+        apply_workbuddy_to_codex(snapshot["codex"], credits)
         modules = self.modules.read()
         snapshot["modules"] = {**modules, "custom": custom["enabled"]}
         snapshot["dotii"] = dotii_state(

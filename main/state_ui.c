@@ -439,7 +439,7 @@ static void add_activity_event(lv_obj_t *screen)
 
 static void return_from_current(void)
 {
-    if (s_current == s_detail) load_screen(enabled_return_screen(page_screen(0)), false);
+    if (s_current == s_detail) load_screen(enabled_return_screen(page_screen(1)), false);
     else if (s_current == s_bambu_detail) load_screen(enabled_return_screen(s_bambu_main), false);
     else if (s_current == s_settings) load_screen(first_enabled_screen(), false);
     else if (s_current == s_power) load_screen(enabled_return_screen(s_before_power), false);
@@ -495,7 +495,7 @@ static void quick_clicked(lv_event_t *event)
 {
     lv_obj_t *target = (lv_obj_t *)lv_event_get_user_data(event);
     if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
-        if (target == s_main) target = page_screen(0);
+        if (target == s_main) target = page_screen(1);
         load_screen_with_transition(target, TRANSITION_CONTROL_UP);
     }
 }
@@ -512,6 +512,96 @@ static void screen_off(void)
     if (!s_screen_on) return;
     bsp_display_brightness_set(0);
     s_screen_on = false;
+}
+
+/* ---- 久坐提醒（本定制版新增）------------------------------------------
+ * 一个本地倒计时：默认 60 分钟。到点后整屏闪烁并在屏幕上文字提醒起身活动，
+ * 触摸或按键可确认（dismiss），计时器随即重新开始。全部在设备本地完成，
+ * 不依赖电脑或网络。 */
+#define REMINDER_DEFAULT_MINUTES 60
+#define REMINDER_FLASH_PERIOD_MS 400
+
+static lv_obj_t *s_reminder;
+static lv_obj_t *s_reminder_title;
+static lv_obj_t *s_reminder_body;
+static bool s_reminder_active;
+static bool s_reminder_visible;
+static uint32_t s_reminder_due_ms;
+static uint32_t s_reminder_last_flash;
+static bool s_reminder_flash_on;
+static uint32_t s_reminder_minutes = REMINDER_DEFAULT_MINUTES;
+
+static void render_reminder_flash(void)
+{
+    if (s_reminder == NULL) return;
+    /* 在深色与亮色之间交替底色，形成明确的"闪屏"视觉效果。 */
+    lv_obj_set_style_bg_color(s_reminder,
+                              color(s_reminder_flash_on ? 0xFF5A3D : COLOR_BG), 0);
+}
+
+static void show_reminder(void)
+{
+    if (s_reminder == NULL) return;
+    s_reminder_visible = true;
+    s_reminder_flash_on = true;
+    if (!s_screen_on) screen_wake();
+    render_reminder_flash();
+    load_screen(s_reminder, true);
+}
+
+static void dismiss_reminder(void)
+{
+    if (!s_reminder_active) return;
+    s_reminder_active = false;
+    s_reminder_visible = false;
+    s_reminder_flash_on = false;
+    s_reminder_due_ms = lv_tick_get() + s_reminder_minutes * 60u * 1000u;
+    load_screen(first_enabled_screen(), false);
+}
+
+static void reminder_timer(void *timer)
+{
+    (void)timer;
+    uint32_t now = lv_tick_get();
+    if (!s_reminder_active && now >= s_reminder_due_ms) {
+        s_reminder_active = true;
+        s_reminder_last_flash = now;
+        show_reminder();
+        return;
+    }
+    if (s_reminder_visible) {
+        if (now - s_reminder_last_flash >= REMINDER_FLASH_PERIOD_MS) {
+            s_reminder_last_flash = now;
+            s_reminder_flash_on = !s_reminder_flash_on;
+            render_reminder_flash();
+        }
+        /* 自动深睡会盖掉提醒，这里保持屏幕点亮直到用户确认。 */
+        s_last_activity = now;
+    }
+}
+
+static void reminder_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_SHORT_CLICKED) return;
+    dismiss_reminder();
+}
+
+static void build_reminder(void)
+{
+    s_reminder = lv_obj_create(NULL);
+    set_screen_background(s_reminder);
+    lv_obj_add_flag(s_reminder, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_reminder, reminder_event, LV_EVENT_SHORT_CLICKED, NULL);
+
+    s_reminder_title = make_label(s_reminder, ui_tr("该活动身体了"), &ui_font_chinese_semibold_24,
+                                  COLOR_BG == 0 ? 0xFFFFFF : 0x1A1A1A);
+    lv_obj_align(s_reminder_title, LV_ALIGN_CENTER, 0, -40);
+
+    s_reminder_body = make_label(s_reminder, ui_tr("别一直盯着电脑，起身走两步"), &s_ui_font, 0x1A1A1A);
+    lv_obj_align(s_reminder_body, LV_ALIGN_CENTER, 0, 20);
+
+    lv_obj_t *hint = make_label(s_reminder, ui_tr("触摸屏幕继续"), &s_ui_font, 0x3A3A3A);
+    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 80);
 }
 
 static void screen_wake(void)
@@ -820,19 +910,22 @@ static void make_reset_metric(lv_obj_t *parent, int x)
     lv_obj_align(caption, LV_ALIGN_BOTTOM_MID, 0, 1);
 }
 
+/* 本固件定制版：移除 Bambu 打印机页面，页面顺序改为
+ * 0 = Dotii 表情（首页）、1 = WorkBuddy 积分、2 = 自定义。
+ * Bambu 相关代码保留编译但不再注册到页面循环中。 */
 static bool page_enabled(uint8_t page)
 {
-    if (!s_snapshot.valid) return page < 2;
-    if (page == 0) return s_snapshot.codex_enabled;
-    if (page == 1) return s_snapshot.bambu_enabled;
+    if (!s_snapshot.valid) return page == 0;
+    if (page == 0) return s_snapshot.dotii_enabled;
+    if (page == 1) return s_snapshot.codex_enabled;
     if (page == 2) return s_snapshot.custom_enabled;
-    return s_snapshot.dotii_enabled;
+    return false;
 }
 
 static lv_obj_t *page_screen(uint8_t page)
 {
-    if (page == 0) return s_snapshot.codex_ui_dual_limit ? s_plus_main : s_main;
-    if (page == 1) return s_bambu_main;
+    if (page == 0) return s_dotii;
+    if (page == 1) return s_snapshot.codex_ui_dual_limit ? s_plus_main : s_main;
     if (page == 2) return s_custom;
     return s_dotii;
 }
@@ -847,22 +940,25 @@ static lv_obj_t *first_enabled_screen(void)
 
 static bool screen_enabled(lv_obj_t *screen)
 {
-    if (screen == s_main || screen == s_plus_main || screen == s_detail) return page_enabled(0);
-    if (screen == s_bambu_main || screen == s_bambu_detail) return page_enabled(1);
+    if (screen == s_reminder) return s_reminder_visible;
+    if (screen == s_dotii) return page_enabled(0);
+    if (screen == s_main || screen == s_plus_main || screen == s_detail) return page_enabled(1);
     if (screen == s_custom) return page_enabled(2);
-    if (screen == s_dotii) return page_enabled(3);
+    if (screen == s_bambu_main || screen == s_bambu_detail) return false;
     return true;
 }
 
 static lv_obj_t *enabled_return_screen(lv_obj_t *screen)
 {
-    if (screen == s_main || screen == s_plus_main) return page_screen(0);
+    /* Codex 主屏/副屏返回自身页（现为第 1 页），不能再用硬编码的 0。 */
+    if (screen == s_main || screen == s_plus_main) return page_screen(1);
     return screen != NULL && screen_enabled(screen) ? screen : first_enabled_screen();
 }
 
 static void update_page_dots(void)
 {
-    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_BLUE, COLOR_BAMBU, COLOR_WARNING, COLOR_CYAN};
+    /* 页面顺序已改为 表情 / WorkBuddy / 自定义，高亮色跟随新顺序。 */
+    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_CYAN, COLOR_BLUE, COLOR_WARNING, COLOR_BAMBU};
     for (uint8_t row = 0; row < PAGE_COUNT; ++row) {
         int total_width = 0;
         uint8_t count = 0;
@@ -983,7 +1079,7 @@ static void build_main(void)
     lv_obj_set_pos(divider, 233, 350);
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_CLICKABLE);
 
-    make_page_dots(s_main_content, 0);
+    make_page_dots(s_main_content, 1);
 
     add_activity_event(s_main_content);
     lv_obj_add_event_cb(s_main, swipe_event, LV_EVENT_GESTURE, NULL);
@@ -1859,8 +1955,9 @@ static void build_dotii(void)
     s_dotii_accent_left = make_dotii_part(s_dotii, 12, 12, -132, 52, COLOR_CYAN);
     s_dotii_accent_right = make_dotii_part(s_dotii, 12, 12, 132, 52, COLOR_CYAN);
     s_dotii_accent_center = make_dotii_part(s_dotii, 12, 12, 0, 88, COLOR_CYAN);
-    /* Like the custom canvas, Dotii is an immersive ambient page and does not
-       show the global navigation dots. */
+    /* 本定制版把表情页提升为首页：原设计作为沉浸页不显示导航点，但首页
+       必须让用户看见还有其他页面可切，因此恢复导航点。 */
+    make_page_dots(s_dotii, 0);
     render_dotii_expression();
 }
 
@@ -2323,8 +2420,8 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     render_dotii_expression();
     update_page_dots();
 
-    if ((s_current == s_main || s_current == s_plus_main) && s_current != page_screen(0)) {
-        load_screen(page_screen(0), false);
+    if ((s_current == s_main || s_current == s_plus_main) && s_current != page_screen(1)) {
+        load_screen(page_screen(1), false);
     } else if (!s_screen_saver_active && !screen_enabled(s_current)) {
         load_screen(first_enabled_screen(), false);
     }
@@ -2365,6 +2462,9 @@ static void ui_timer(lv_timer_t *timer)
         s_charging_screen_off_timeout_seconds : s_screen_off_timeout_seconds;
     const uint32_t active_sleep_timeout = s_external_power ?
         s_charging_sleep_timeout_seconds : s_sleep_timeout_seconds;
+    /* 久坐提醒展示期间冻结熄屏与自动深睡：提醒必须亮着直到用户确认，
+       否则最深睡会直接把提醒吞掉。reminder_timer 会持续刷新 s_last_activity。 */
+    if (s_reminder_visible) return;
     if (s_screen_on && !s_screen_saver_active && active_screen_off_timeout > 0 &&
         inactive_ms > active_screen_off_timeout * 1000U) {
         if (!enter_screen_saver()) screen_off();
@@ -2392,9 +2492,11 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     build_bambu();
     build_custom();
     build_dotii();
+    build_reminder();
     build_settings();
     build_control();
     build_power();
+    /* 首页为表情页（page_screen(0)）。 */
     s_current = page_screen(0);
     s_last_activity = lv_tick_get();
     lv_obj_invalidate(s_current);
@@ -2407,10 +2509,19 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     lv_timer_create(ui_timer, 1000, NULL);
     /* The compact geometric character uses eight 100 ms phases. */
     lv_timer_create(dotii_timer, 100, NULL);
+    /* 久坐提醒：100 ms 轮询，既用于到点触发，也用于闪屏节奏。 */
+    s_reminder_active = false;
+    s_reminder_due_ms = lv_tick_get() + s_reminder_minutes * 60u * 1000u;
+    lv_timer_create(reminder_timer, 100, NULL);
 }
 
 void state_ui_button_a_short(void)
 {
+    /* 提醒生效时任意按键都视为"我已活动"，先确认再回到正常页面。 */
+    if (s_reminder_visible) {
+        dismiss_reminder();
+        return;
+    }
     if (s_screen_saver_active) {
         exit_screen_saver();
         return;
@@ -2428,9 +2539,9 @@ void state_ui_button_a_short(void)
         load_screen(first_enabled_screen(), false);
         return;
     }
-    int current_page = (s_current == s_main || s_current == s_plus_main) ? 0 :
-        s_current == s_bambu_main ? 1 : s_current == s_custom ? 2 :
-        s_current == s_dotii ? 3 : -1;
+    int current_page = s_current == s_dotii ? 0 :
+        (s_current == s_main || s_current == s_plus_main) ? 1 :
+        s_current == s_custom ? 2 : -1;
     if (current_page < 0) {
         load_screen(first_enabled_screen(), true);
         return;

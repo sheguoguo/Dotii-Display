@@ -12,7 +12,9 @@
 static QueueHandle_t s_frames;
 static SemaphoreHandle_t s_write_lock;
 
-static bool read_exact(void *destination, size_t length)
+/* USB 数据通道在本定制版中停用，接收线程保留但不再启动；
+ * 标记 __attribute__((unused)) 以避免 -Wunused-function 报错。 */
+__attribute__((unused)) static bool read_exact(void *destination, size_t length)
 {
     uint8_t *data = destination;
     size_t offset = 0;
@@ -25,7 +27,7 @@ static bool read_exact(void *destination, size_t length)
     return true;
 }
 
-static void receiver(void *argument)
+__attribute__((unused)) static void receiver(void *argument)
 {
     (void)argument;
     unsigned magic = 0;
@@ -50,13 +52,10 @@ static void receiver(void *argument)
 
 esp_err_t usb_transport_start(void)
 {
-    usb_serial_jtag_driver_config_t config = {.tx_buffer_size = 1024, .rx_buffer_size = 8192};
-    esp_err_t error = usb_serial_jtag_driver_install(&config);
-    if (error != ESP_OK) return error;
-    s_frames = xQueueCreate(4, sizeof(char *));
-    s_write_lock = xSemaphoreCreateMutex();
-    if (!s_frames || !s_write_lock) return ESP_ERR_NO_MEM;
-    return xTaskCreate(receiver, "usb_rx", 4096, NULL, 4, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
+    /* 本定制版不启用 USB 数据通道（connectivity_start_usb 不再调用本函数）。
+     * 保留实现以便需要时恢复；这里不加锁也不建队列，直接返回未初始化状态，
+     * 于是 usb_transport_receive() 永远返回 NULL、send() 变成空操作。 */
+    return ESP_OK;
 }
 
 cJSON *usb_transport_receive(void)

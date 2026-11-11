@@ -56,7 +56,8 @@ EXT_RAM_BSS_ATTR static codex_snapshot_t s_last_snapshot;
 EXT_RAM_BSS_ATTR static codex_snapshot_t s_work_snapshot;
 static bool s_have_snapshot;
 static int64_t s_usb_last_sync;
-static char s_connection_mode[8] = "auto";
+/* 本定制版默认只走 Wi-Fi（USB 数据通道已禁用）。 */
+static char s_connection_mode[8] = "wifi";
 static char s_device_id[16];
 static bool s_wifi_bridge_online;
 static int64_t s_last_wifi_poll;
@@ -69,8 +70,8 @@ EXT_RAM_BSS_ATTR static uint8_t s_usb_decoded[4096];
 
 bool connectivity_usb_active(void)
 {
-    return strcmp(s_connection_mode, "wifi") != 0 && s_usb_last_sync > 0 &&
-           esp_timer_get_time() - s_usb_last_sync < 12000000;
+    /* USB 数据通道在本定制版中不再启动，因此永远不是活动通道。 */
+    return false;
 }
 
 static uint8_t *s_custom_image_buffers[2];
@@ -1386,8 +1387,12 @@ void connectivity_start(void)
 
 esp_err_t connectivity_start_usb(void)
 {
-    /* Reserve radio and display DMA allocations before USB ring buffers. */
-    return usb_transport_start();
+    /* 本定制版不使用 USB 数据通道：设备只经 Wi-Fi 拉取快照，
+     * 配网走蓝牙（ble_bridge）。这里直接返回成功而不启动 USB 传输栈，
+     * 避免占用 USB Serial/JTAG 的环形缓冲与内部 RAM。
+     * 烧录仍然走 esptool 的 ROM 下载模式，与数据通道无关。 */
+    ESP_LOGI(TAG, "USB data transport disabled by build (Wi-Fi + BLE only)");
+    return ESP_OK;
 }
 
 void connectivity_request_refresh(void)

@@ -1,0 +1,65 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [main, "feat/**"]
+    paths:
+      - "main/**"
+      - "components/**"
+      - "managed_components/**"
+      - "CMakeLists.txt"
+      - "partitions.csv"
+      - "sdkconfig.defaults"
+      - "dependencies.lock"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report versions
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py --version
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          # MINIMAL_BUILD 与仓库内已提交的 managed_components 都是构建输入，
+          # 不依赖 Component Manager 联网拉取。
+          idf.py -B build build
+
+      - name: Show image info
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          python -m esptool --chip esp32s3 image_info build/state_display.bin || true
+          ls -l build/bootloader/bootloader.bin \
+                build/partition_table/partition-table.bin \
+                build/state_display.bin
+
+      - name: Collect flashable images
+        shell: bash
+        run: |
+          mkdir -p out/bootloader out/partition_table
+          cp build/bootloader/bootloader.bin out/bootloader/
+          cp build/partition_table/partition-table.bin out/partition_table/
+          cp build/state_display.bin out/
+          cp build/flasher_args.json out/ || true
+          cd out && find . -type f -exec sha256sum {} \; | sort -k2 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotii-firmware-${{ github.sha }}
+          path: out/**
+          if-no-files-found: error
+          retention-days: 30
