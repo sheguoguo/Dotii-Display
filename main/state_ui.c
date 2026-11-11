@@ -2517,6 +2517,10 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     build_power();
     /* 首页为表情页（page_screen(0)）。 */
     s_current = page_screen(0);
+    ESP_LOGI("state_ui", "Home: is_dotii=%d is_main=%d is_custom=%d valid=%d dotii_en=%d codex_en=%d",
+             (int)(s_current == s_dotii), (int)(s_current == s_main),
+             (int)(s_current == s_custom), (int)s_snapshot.valid,
+             (int)s_snapshot.dotii_enabled, (int)s_snapshot.codex_enabled);
     s_last_activity = lv_tick_get();
     lv_obj_invalidate(s_current);
     /* Push one complete first frame while the caller still owns the BSP LVGL
