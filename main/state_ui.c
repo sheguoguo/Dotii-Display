@@ -562,21 +562,22 @@ static void dismiss_reminder(void)
 static void reminder_timer(void *timer)
 {
     (void)timer;
+    static uint32_t last_flash = 0;
     uint32_t now = lv_tick_get();
     if (!s_reminder_active && now >= s_reminder_due_ms) {
         s_reminder_active = true;
-        s_reminder_last_flash = now;
+        last_flash = now;
         show_reminder();
         return;
     }
-    if (s_reminder_visible) {
-        if (now - s_reminder_last_flash >= REMINDER_FLASH_PERIOD_MS) {
-            s_reminder_last_flash = now;
-            s_reminder_flash_on = !s_reminder_flash_on;
-            render_reminder_flash();
-        }
-        /* 自动深睡会盖掉提醒，这里保持屏幕点亮直到用户确认。 */
-        s_last_activity = now;
+    if (!s_reminder_visible) return;
+    /* 只翻转底色，不改写 s_last_activity：后者是"屏幕无操作"的时钟，
+       若在提醒期间持续刷新，会阻止原设计的待机表情与自动深睡判定。
+       熄屏与深睡由 ui_timer 中的 s_reminder_visible 早退单独挡住。 */
+    if (now - last_flash >= REMINDER_FLASH_PERIOD_MS) {
+        last_flash = now;
+        s_reminder_flash_on = !s_reminder_flash_on;
+        render_reminder_flash();
     }
 }
 
