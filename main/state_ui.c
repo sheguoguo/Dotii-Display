@@ -2521,9 +2521,15 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     build_settings();
     build_control();
     build_power();
-    /* 首页为表情页（page_screen(0)）。 */
+    /* 首页为表情页（page_screen(0)）。
+     * 关键修复（改动 3 根因）：build_main() 复用了 lv_screen_active() 作为
+     * Codex 页，所以开机时 LVGL 的活动屏幕仍是 s_main。之前只给 s_current
+     * 赋值并 invalidate，从未真正 load 表情页 —— 显示层停在 Codex 弧线页，
+     * 而逻辑层却认为已在首页，update_snapshot 的兜底也因此不会触发。
+     * 必须在首帧渲染前真正切换活动屏幕。 */
     s_current = page_screen(0);
     s_last_activity = lv_tick_get();
+    lv_screen_load_anim(s_current, LV_SCREEN_LOAD_ANIM_NONE, 0, 0, false);
     lv_obj_invalidate(s_current);
     /* Push one complete first frame while the caller still owns the BSP LVGL
        lock.  Subsequent timer updates can then use partial refresh safely. */
