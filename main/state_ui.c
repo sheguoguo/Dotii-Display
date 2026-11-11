@@ -534,9 +534,20 @@ static uint32_t s_reminder_minutes = REMINDER_DEFAULT_MINUTES;
 static void render_reminder_flash(void)
 {
     if (s_reminder == NULL) return;
-    /* 在深色与亮色之间交替底色，形成明确的"闪屏"视觉效果。 */
-    lv_obj_set_style_bg_color(s_reminder,
-                              color(s_reminder_flash_on ? 0xFF5A3D : COLOR_BG), 0);
+    /* 提醒页保持浅底深字（保证文字始终可读），闪烁靠边框光晕的明暗交替：
+       亮橙边框 + 亮橙内发光 与 暗色边框 之间切换，视觉上足够醒目，
+       又不会因为背景忽明忽暗让文字瞬间不可读。 */
+    if (s_reminder_flash_on) {
+        lv_obj_set_style_border_width(s_reminder, 14, 0);
+        lv_obj_set_style_border_color(s_reminder, color(0xFF5A3D), 0);
+        lv_obj_set_style_border_opa(s_reminder, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(s_reminder, color(0xFFE3DB), 0);
+    } else {
+        lv_obj_set_style_border_width(s_reminder, 14, 0);
+        lv_obj_set_style_border_color(s_reminder, color(0x6B2A18), 0);
+        lv_obj_set_style_border_opa(s_reminder, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(s_reminder, color(0xFFF3EF), 0);
+    }
 }
 
 static void show_reminder(void)
@@ -589,18 +600,26 @@ static void reminder_event(lv_event_t *event)
 static void build_reminder(void)
 {
     s_reminder = lv_obj_create(NULL);
-    set_screen_background(s_reminder);
+    /* 提醒页是浅底深字（与其余深色页面不同），因为它必须在第一时间
+       被"看懂"，对比度优先于观感统一。 */
+    lv_obj_remove_flag(s_reminder, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_reminder, color(0xFFE3DB), 0);
+    lv_obj_set_style_bg_opa(s_reminder, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_reminder, 14, 0);
+    lv_obj_set_style_border_color(s_reminder, color(0xFF5A3D), 0);
+    lv_obj_set_style_border_opa(s_reminder, LV_OPA_COVER, 0);
     lv_obj_add_flag(s_reminder, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_reminder, reminder_event, LV_EVENT_SHORT_CLICKED, NULL);
 
     s_reminder_title = make_label(s_reminder, ui_tr("该活动身体了"), &ui_font_chinese_semibold_24,
-                                  COLOR_BG == 0 ? 0xFFFFFF : 0x1A1A1A);
+                                  0x5A1B08);
     lv_obj_align(s_reminder_title, LV_ALIGN_CENTER, 0, -40);
 
-    s_reminder_body = make_label(s_reminder, ui_tr("别一直盯着电脑，起身走两步"), &s_ui_font, 0x1A1A1A);
+    s_reminder_body = make_label(s_reminder, ui_tr("别一直盯着电脑，起身走两步"), &s_ui_font,
+                                 0x6B2A18);
     lv_obj_align(s_reminder_body, LV_ALIGN_CENTER, 0, 20);
 
-    lv_obj_t *hint = make_label(s_reminder, ui_tr("触摸屏幕继续"), &s_ui_font, 0x3A3A3A);
+    lv_obj_t *hint = make_label(s_reminder, ui_tr("触摸屏幕继续"), &s_ui_font, 0x8A4A36);
     lv_obj_align(hint, LV_ALIGN_CENTER, 0, 80);
 }
 
