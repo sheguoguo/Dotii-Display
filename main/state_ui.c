@@ -14,6 +14,7 @@
 #include "esp_attr.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_system.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
@@ -934,8 +935,11 @@ static void make_reset_metric(lv_obj_t *parent, int x)
  * Bambu 相关代码保留编译但不再注册到页面循环中。 */
 static bool page_enabled(uint8_t page)
 {
-    if (!s_snapshot.valid) return page == 0;
-    if (page == 0) return s_snapshot.dotii_enabled;
+    /* 表情页是首页，且是本定制版的主界面，永远可用：
+       它不依赖后台模块开关，否则一旦快照缺失/模块开关为 false，
+       首页就会被踢到 Codex 页，观感上像是"固件没刷成功"。 */
+    if (page == 0) return true;
+    if (!s_snapshot.valid) return false;
     if (page == 1) return s_snapshot.codex_enabled;
     if (page == 2) return s_snapshot.custom_enabled;
     return false;
@@ -2441,7 +2445,9 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
 
     if ((s_current == s_main || s_current == s_plus_main) && s_current != page_screen(1)) {
         load_screen(page_screen(1), false);
-    } else if (!s_screen_saver_active && !screen_enabled(s_current)) {
+    } else if (!s_screen_saver_active && !s_reminder_visible && !screen_enabled(s_current)) {
+        /* 首页 page_enabled(0) 恒为 true，因此表情页不会再被这里踢走；
+           这条兜底只处理"当前停在某个已被关掉的模块页"的情况。 */
         load_screen(first_enabled_screen(), false);
     }
 }
@@ -2517,10 +2523,6 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     build_power();
     /* 首页为表情页（page_screen(0)）。 */
     s_current = page_screen(0);
-    ESP_LOGI("state_ui", "Home: is_dotii=%d is_main=%d is_custom=%d valid=%d dotii_en=%d codex_en=%d",
-             (int)(s_current == s_dotii), (int)(s_current == s_main),
-             (int)(s_current == s_custom), (int)s_snapshot.valid,
-             (int)s_snapshot.dotii_enabled, (int)s_snapshot.codex_enabled);
     s_last_activity = lv_tick_get();
     lv_obj_invalidate(s_current);
     /* Push one complete first frame while the caller still owns the BSP LVGL
