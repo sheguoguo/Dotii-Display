@@ -249,11 +249,14 @@ class UsbBridge:
                         for kind, available, revision in (
                             ("custom", custom.get("image_available"), custom.get("image_revision", 0)),
                             ("camera", bambu.get("camera_available"), bambu.get("camera_revision", 0)),
+                            ("animation", custom.get("animation_available"), custom.get("animation_revision", 0)),
                         ):
                             if available and revisions.get(kind) != revision:
                                 try:
                                     if kind == "custom":
                                         body = self.server.assets.read_render()
+                                    elif kind == "animation":
+                                        body = self.server.assets.read_animation()
                                     else:
                                         revision, body = self.server.bambu.get_camera_frame()
                                     if body:

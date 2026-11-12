@@ -137,6 +137,7 @@ static uint32_t s_reminder_tick_ms;
 static lv_obj_t *s_brightness_slider;
 static lv_obj_t *s_custom_ring;
 static lv_obj_t *s_custom_image;
+static lv_obj_t *s_custom_gif;
 static lv_obj_t *s_custom_title;
 static lv_obj_t *s_custom_value;
 static lv_obj_t *s_custom_body;
@@ -188,6 +189,8 @@ static transition_t s_pending_transition;
 static lv_font_t s_ui_font;
 static lv_image_dsc_t s_custom_image_dsc;
 static uint32_t s_custom_image_revision;
+static lv_image_dsc_t s_custom_animation_dsc;
+static uint32_t s_custom_animation_revision;
 static lv_image_dsc_t s_bambu_camera_dsc;
 static uint32_t s_bambu_camera_revision;
 static uint8_t *s_bambu_camera_pixels;
@@ -394,6 +397,12 @@ static void load_screen_commit(void *user_data)
 static void load_screen_with_transition(lv_obj_t *screen, transition_t transition)
 {
     if (screen == NULL || screen == s_current || s_screen_load_pending) return;
+
+    /* 离开自定义页就暂停 GIF 解码，回来再继续：否则后台一直解码烧 CPU。 */
+    if (s_custom_gif != NULL) {
+        if (screen == s_custom) lv_gif_resume(s_custom_gif);
+        else lv_gif_pause(s_custom_gif);
+    }
 
     const bsp_display_sweep_t sweep =
         transition == TRANSITION_PAGE_BACK ? BSP_DISPLAY_SWEEP_RIGHT :
@@ -787,6 +796,31 @@ static void build_reminder(void)
     lv_obj_align(hint, LV_ALIGN_CENTER, 0, 80);
 }
 
+/* 加减号用矩形拼，不走字体：digits_64 里 '+' 的字形在 46px 圆钮内会画成
+ * 一根竖条加两条细线（缺横向笔画），实机上是明显缺陷。 */
+static void make_step_icon(lv_obj_t *parent, bool plus)
+{
+    const lv_color_t ink = color(COLOR_TEXT);
+    lv_obj_t *horizontal = lv_obj_create(parent);
+    lv_obj_remove_style_all(horizontal);
+    lv_obj_remove_flag(horizontal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(horizontal, 22, 4);
+    lv_obj_set_style_radius(horizontal, 2, 0);
+    lv_obj_set_style_bg_color(horizontal, ink, 0);
+    lv_obj_set_style_bg_opa(horizontal, LV_OPA_COVER, 0);
+    lv_obj_center(horizontal);
+    if (!plus) return;
+
+    lv_obj_t *vertical = lv_obj_create(parent);
+    lv_obj_remove_style_all(vertical);
+    lv_obj_remove_flag(vertical, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(vertical, 4, 22);
+    lv_obj_set_style_radius(vertical, 2, 0);
+    lv_obj_set_style_bg_color(vertical, ink, 0);
+    lv_obj_set_style_bg_opa(vertical, LV_OPA_COVER, 0);
+    lv_obj_center(vertical);
+}
+
 static void build_reminder_setup(void)
 {
     s_reminder_setup = lv_obj_create(NULL);
@@ -838,8 +872,7 @@ static void build_reminder_setup(void)
     lv_obj_set_style_bg_color(minus, color(0x232B29), 0);
     lv_obj_set_style_bg_color(minus, color(0x323C39), LV_STATE_PRESSED);
     lv_obj_align(minus, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t *minus_text = make_label(minus, "-", &ui_font_digits_64, COLOR_TEXT);
-    lv_obj_center(minus_text);
+    make_step_icon(minus, false);
     lv_obj_add_event_cb(minus, reminder_minutes_event, LV_EVENT_CLICKED,
                         (void *)(intptr_t)(-REMINDER_MINUTE_STEP));
 
@@ -852,8 +885,7 @@ static void build_reminder_setup(void)
     lv_obj_set_style_bg_color(plus, color(0x232B29), 0);
     lv_obj_set_style_bg_color(plus, color(0x323C39), LV_STATE_PRESSED);
     lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_t *plus_text = make_label(plus, "+", &ui_font_digits_64, COLOR_TEXT);
-    lv_obj_center(plus_text);
+    make_step_icon(plus, true);
     lv_obj_add_event_cb(plus, reminder_minutes_event, LV_EVENT_CLICKED,
                         (void *)(intptr_t)REMINDER_MINUTE_STEP);
 
@@ -2041,6 +2073,16 @@ static void build_custom(void)
     lv_obj_add_flag(s_custom_image, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_custom_image, LV_OBJ_FLAG_CLICKABLE);
 
+    /* GIF 动画：与静态图同层，GIF 可用时优先显示动画。 */
+    s_custom_gif = lv_gif_create(content);
+    /* RGB565 帧缓冲比 ARGB8888 省一半 PSRAM；循环次数设成极大值，
+       文件自身 loop=1（只播一次）也能一直循环。 */
+    lv_gif_set_color_format(s_custom_gif, LV_COLOR_FORMAT_RGB565);
+    lv_gif_set_loop_count(s_custom_gif, 0x7FFFFFFF);
+    lv_obj_center(s_custom_gif);
+    lv_obj_add_flag(s_custom_gif, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_custom_gif, LV_OBJ_FLAG_CLICKABLE);
+
     s_custom_ring = lv_arc_create(content);
     lv_obj_set_size(s_custom_ring, SCREEN_SIZE, SCREEN_SIZE);
     lv_obj_center(s_custom_ring);
@@ -2880,7 +2922,32 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     lv_arc_set_value(s_custom_ring, 100);
     const uint8_t *custom_image = snapshot->custom_image_available ?
         connectivity_custom_image_data(snapshot->custom_image_revision) : NULL;
-    if (custom_image != NULL) {
+    size_t animation_size = 0;
+    const uint8_t *custom_animation = snapshot->custom_animation_available ?
+        connectivity_custom_animation_data(snapshot->custom_animation_revision, &animation_size) : NULL;
+    const bool show_animation = custom_animation != NULL && animation_size > 0;
+    if (show_animation) {
+        if (s_custom_animation_revision != snapshot->custom_animation_revision) {
+            if (s_custom_animation_revision != 0) lv_image_cache_drop(&s_custom_animation_dsc);
+            memset(&s_custom_animation_dsc, 0, sizeof(s_custom_animation_dsc));
+            s_custom_animation_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+            s_custom_animation_dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
+            s_custom_animation_dsc.header.w = SCREEN_SIZE;
+            s_custom_animation_dsc.header.h = SCREEN_SIZE;
+            s_custom_animation_dsc.data_size = (uint32_t)animation_size;
+            s_custom_animation_dsc.data = custom_animation;
+            lv_gif_set_src(s_custom_gif, &s_custom_animation_dsc);
+            s_custom_animation_revision = snapshot->custom_animation_revision;
+        }
+        lv_obj_remove_flag(s_custom_gif, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_custom_image, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_custom_ring, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_custom_title, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_custom_value, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_custom_body, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_custom_footer, LV_OBJ_FLAG_HIDDEN);
+    } else if (custom_image != NULL) {
+        lv_obj_add_flag(s_custom_gif, LV_OBJ_FLAG_HIDDEN);
         if (s_custom_image_revision != snapshot->custom_image_revision) {
             if (s_custom_image_revision != 0) {
                 lv_image_cache_drop(&s_custom_image_dsc);
@@ -2903,6 +2970,7 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         lv_obj_add_flag(s_custom_body, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_custom_footer, LV_OBJ_FLAG_HIDDEN);
     } else {
+        lv_obj_add_flag(s_custom_gif, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_custom_image, LV_OBJ_FLAG_HIDDEN);
         if (snapshot->custom_ring_enabled) lv_obj_remove_flag(s_custom_ring, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_custom_ring, LV_OBJ_FLAG_HIDDEN);

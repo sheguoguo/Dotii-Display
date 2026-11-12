@@ -57,6 +57,8 @@ MAX_BODY = 32 * 1024
 CUSTOM_FRAME_WIDTH = 466
 CUSTOM_FRAME_HEIGHT = 466
 CUSTOM_FRAME_SIZE = CUSTOM_FRAME_WIDTH * CUSTOM_FRAME_HEIGHT * 2
+# 与固件 CUSTOM_ANIMATION_MAX_BYTES 保持一致
+CUSTOM_ANIMATION_MAX_BYTES = 4 * 1024 * 1024
 MAX_CUSTOM_SOURCE_SIZE = 4 * 1024 * 1024
 MAX_DISPLAY_TASKS = 6
 ALLOWED_STATUSES = {"working", "waiting_user", "completed", "failed", "idle", "offline"}
@@ -899,6 +901,7 @@ class CustomAssetStore:
         self.pending_path = folder / "custom-screen.pending"
         self.source_path = folder / "custom-source.bin"
         self.source_meta_path = folder / "custom-source.json"
+        self.animation_path = folder / "custom-animation.gif"
         self.lock = threading.RLock()
 
     @staticmethod
@@ -987,6 +990,40 @@ class CustomAssetStore:
             if len(body) != CUSTOM_FRAME_SIZE:
                 raise ValueError("stored custom frame has invalid size")
             return body
+
+    def write_animation(self, body: bytes) -> dict[str, Any]:
+        if not body.startswith((b"GIF87a", b"GIF89a")):
+            raise ValueError("GIF 文件签名无效")
+        if len(body) > CUSTOM_ANIMATION_MAX_BYTES:
+            raise ValueError(
+                f"GIF 文件过大，上限 {CUSTOM_ANIMATION_MAX_BYTES // (1024 * 1024)} MB"
+            )
+        with self.lock:
+            self._atomic_bytes(self.animation_path, body)
+            return self.animation_info()
+
+    def animation_info(self) -> dict[str, Any]:
+        with self.lock:
+            if not self.animation_path.is_file():
+                return {"animation_available": False, "animation_revision": 0, "animation_size": 0}
+            body = self.animation_path.read_bytes()
+            if not body:
+                return {"animation_available": False, "animation_revision": 0, "animation_size": 0}
+            return {
+                "animation_available": True,
+                "animation_revision": zlib.crc32(body) & 0xFFFFFFFF,
+                "animation_size": len(body),
+            }
+
+    def read_animation(self) -> bytes:
+        with self.lock:
+            return self.animation_path.read_bytes()
+
+    def clear_animation(self) -> dict[str, Any]:
+        with self.lock:
+            if self.animation_path.exists():
+                self.animation_path.unlink()
+            return self.animation_info()
 
 
 class ModuleConfigStore:
@@ -1382,6 +1419,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_bytes(HTTPStatus.OK, self.bridge.assets.read_render(), "application/octet-stream")
             except (OSError, ValueError) as error:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+        elif path == "/api/v1/custom-animation.gif":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                self._send_bytes(HTTPStatus.OK, self.bridge.assets.read_animation(), "image/gif")
+            except (OSError, ValueError) as error:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
         else:
             self._serve_static(path)
 
@@ -1544,6 +1589,28 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     self._read_bytes(MAX_CUSTOM_SOURCE_SIZE), content_type
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, **info})
+            except (OSError, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/custom/animation":
+            if self._deny_nonlocal():
+                return
+            try:
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if content_type not in {"image/gif", "application/octet-stream"}:
+                    raise ValueError("GIF 动画必须使用 image/gif")
+                info = self.bridge.assets.write_animation(
+                    self._read_bytes(CUSTOM_ANIMATION_MAX_BYTES)
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, **info})
+            except (OSError, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/custom/animation/clear":
+            if self._deny_nonlocal():
+                return
+            try:
+                self._send_json(HTTPStatus.OK, {"ok": True, **self.bridge.assets.clear_animation()})
             except (OSError, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -1719,6 +1786,7 @@ class BridgeServer(ThreadingHTTPServer):
         custom = self.custom.read()
         custom.update(self.assets.source_info())
         custom.update(self.assets.render_info())
+        custom.update(self.assets.animation_info())
         snapshot["custom"] = custom
         snapshot["bambu"] = self.bambu.snapshot()
         # 本定制版把主屏的"用量"从 Codex 换成 WorkBuddy 积分。

@@ -77,6 +77,11 @@ bool connectivity_usb_active(void)
 static uint8_t *s_custom_image_buffers[2];
 static uint32_t s_custom_image_revisions[2];
 static int s_custom_image_active = -1;
+/* 自定义页 GIF：单缓冲，PSRAM 存放原始 GIF 字节，播放交给 LVGL 的 lv_gif。 */
+#define CUSTOM_ANIMATION_MAX_BYTES (4 * 1024 * 1024)
+static uint8_t *s_custom_animation_buffer;
+static uint32_t s_custom_animation_size;
+static uint32_t s_custom_animation_revision;
 static uint8_t *s_bambu_camera_buffers[2];
 static uint32_t s_bambu_camera_revisions[2];
 static int s_bambu_camera_active = -1;
@@ -486,6 +491,18 @@ static void copy_custom_config(cJSON *root, codex_snapshot_t *snapshot)
         snapshot->custom_image_available = true;
         snapshot->custom_image_revision = (uint32_t)image_revision->valuedouble;
         snapshot->custom_image_size = (uint32_t)image_size->valuedouble;
+    }
+
+    /* GIF 动画：后端给出可用性、修订号与字节数，设备按需拉取到 PSRAM。 */
+    cJSON *animation_available = cJSON_GetObjectItemCaseSensitive(custom, "animation_available");
+    cJSON *animation_revision = cJSON_GetObjectItemCaseSensitive(custom, "animation_revision");
+    cJSON *animation_size = cJSON_GetObjectItemCaseSensitive(custom, "animation_size");
+    if (cJSON_IsTrue(animation_available) && cJSON_IsNumber(animation_revision) &&
+        cJSON_IsNumber(animation_size) && animation_size->valuedouble > 0 &&
+        animation_size->valuedouble <= CUSTOM_ANIMATION_MAX_BYTES) {
+        snapshot->custom_animation_available = true;
+        snapshot->custom_animation_revision = (uint32_t)animation_revision->valuedouble;
+        snapshot->custom_animation_size = (uint32_t)animation_size->valuedouble;
     }
 }
 
@@ -897,6 +914,57 @@ static bool fetch_custom_image(uint32_t revision)
     return true;
 }
 
+static bool fetch_custom_animation(uint32_t revision, uint32_t size)
+{
+    if (revision == 0 || size < 8 || size > CUSTOM_ANIMATION_MAX_BYTES) return false;
+    if (s_custom_animation_buffer != NULL && s_custom_animation_revision == revision &&
+        s_custom_animation_size == size) {
+        return true;
+    }
+    const device_config_values_t *device_config = device_config_get();
+    char url[256];
+    strlcpy(url, device_config->bridge_url, sizeof(url));
+    char *last_slash = strrchr(url, '/');
+    if (last_slash == NULL) return false;
+    strlcpy(last_slash + 1, "custom-animation.gif", sizeof(url) - (size_t)(last_slash + 1 - url));
+
+    if (s_custom_animation_buffer == NULL || s_custom_animation_size < size) {
+        uint8_t *buffer = heap_caps_realloc(s_custom_animation_buffer, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buffer == NULL) {
+            ESP_LOGE(TAG, "Unable to allocate custom animation buffer");
+            return false;
+        }
+        s_custom_animation_buffer = buffer;
+    }
+    image_body_t response = {.data = s_custom_animation_buffer, .capacity = size};
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = image_http_event_handler,
+        .user_data = &response,
+        .timeout_ms = 20000,
+        .buffer_size = 4096,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) return false;
+    if (strlen(device_config->bridge_token) > 0) {
+        esp_http_client_set_header(client, "X-Bridge-Token", device_config->bridge_token);
+    }
+    esp_err_t error = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (error != ESP_OK || status != 200 || response.overflow || response.length != size) {
+        ESP_LOGW(TAG, "Custom animation request failed: %s, HTTP %d, bytes %u",
+                 esp_err_to_name(error), status, (unsigned)response.length);
+        return false;
+    }
+    s_custom_animation_size = size;
+    s_custom_animation_revision = revision;
+    ESP_LOGI(TAG, "Custom animation received: %u bytes, revision %lu",
+             (unsigned)size, (unsigned long)revision);
+    return true;
+}
+
 static bool fetch_bambu_camera(uint32_t revision)
 {
     const device_config_values_t *device_config = device_config_get();
@@ -993,6 +1061,10 @@ static bool fetch_snapshot(codex_snapshot_t *snapshot)
         !fetch_custom_image(snapshot->custom_image_revision)) {
         snapshot->custom_image_available = false;
     }
+    if (parsed && snapshot->custom_animation_available &&
+        !fetch_custom_animation(snapshot->custom_animation_revision, snapshot->custom_animation_size)) {
+        snapshot->custom_animation_available = false;
+    }
     if (parsed && snapshot->bambu_camera_available &&
         !fetch_bambu_camera(snapshot->bambu_camera_revision)) {
         use_ready_camera_frame(snapshot);
@@ -1008,6 +1080,15 @@ const uint8_t *connectivity_custom_image_data(uint32_t revision)
         }
     }
     return NULL;
+}
+
+const uint8_t *connectivity_custom_animation_data(uint32_t revision, size_t *size)
+{
+    if (revision == 0 || s_custom_animation_buffer == NULL || s_custom_animation_revision != revision) {
+        return NULL;
+    }
+    if (size != NULL) *size = s_custom_animation_size;
+    return s_custom_animation_buffer;
 }
 
 const uint8_t *connectivity_bambu_camera_data(uint32_t revision)
@@ -1100,10 +1181,76 @@ static void apply_connection_options(cJSON *root)
     }
 }
 
+/* GIF 动画没有固定字节数，单独走一条变长通道：
+   第一片带 total 分配缓冲，最后一片校验 CRC 后整体换入。 */
+static uint8_t *s_anim_staging;
+static uint32_t s_anim_staging_capacity;
+static uint32_t s_anim_offset;
+static uint32_t s_anim_total;
+static uint32_t s_anim_crc;
+static uint32_t s_anim_revision;
+
+static bool receive_usb_animation(cJSON *root)
+{
+    cJSON *offset_value = cJSON_GetObjectItemCaseSensitive(root, "offset");
+    cJSON *revision_value = cJSON_GetObjectItemCaseSensitive(root, "revision");
+    cJSON *total_value = cJSON_GetObjectItemCaseSensitive(root, "total");
+    cJSON *crc_value = cJSON_GetObjectItemCaseSensitive(root, "crc");
+    if (!cJSON_IsNumber(offset_value) || !cJSON_IsNumber(revision_value) || !cJSON_IsNumber(crc_value) ||
+        !cJSON_IsNumber(total_value)) return false;
+    const uint32_t total = (uint32_t)total_value->valuedouble;
+    const uint32_t offset = (uint32_t)offset_value->valuedouble;
+    if (total < 8 || total > CUSTOM_ANIMATION_MAX_BYTES || offset >= total) return false;
+
+    if (offset == 0) {
+        if (s_anim_staging_capacity < total) {
+            uint8_t *expanded = heap_caps_realloc(s_anim_staging, total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (expanded == NULL) return false;
+            s_anim_staging = expanded;
+            s_anim_staging_capacity = total;
+        }
+        s_anim_offset = 0;
+        s_anim_total = total;
+        s_anim_revision = (uint32_t)revision_value->valuedouble;
+        s_anim_crc = (uint32_t)crc_value->valuedouble;
+    }
+    if (s_anim_staging == NULL || offset != s_anim_offset || total != s_anim_total ||
+        s_anim_revision != (uint32_t)revision_value->valuedouble ||
+        s_anim_crc != (uint32_t)crc_value->valuedouble) return false;
+
+    const char *encoded = usb_string(root, "data");
+    if (strlen(encoded) > 5500) return false;
+    size_t length = 0;
+    if (mbedtls_base64_decode(s_usb_decoded, sizeof(s_usb_decoded), &length,
+                              (const unsigned char *)encoded, strlen(encoded)) != 0 ||
+        !length || offset + length > total) return false;
+    memcpy(s_anim_staging + offset, s_usb_decoded, length);
+    s_anim_offset += length;
+    if (s_anim_offset < total) return true;
+
+    if (esp_rom_crc32_le(0, s_anim_staging, total) != s_anim_crc) {
+        ESP_LOGW(TAG, "Custom animation CRC mismatch, dropped");
+        return false;
+    }
+    if (s_custom_animation_buffer == NULL || s_custom_animation_size < total) {
+        uint8_t *buffer = heap_caps_realloc(s_custom_animation_buffer, total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buffer == NULL) return false;
+        s_custom_animation_buffer = buffer;
+    }
+    memcpy(s_custom_animation_buffer, s_anim_staging, total);
+    s_custom_animation_size = total;
+    s_custom_animation_revision = s_anim_revision;
+    ESP_LOGI(TAG, "Custom animation received: %u bytes, revision %lu",
+             (unsigned)total, (unsigned long)s_custom_animation_revision);
+    return true;
+}
+
 static bool receive_usb_image(cJSON *root)
 {
-    const bool custom = strcmp(usb_string(root, "kind"), "custom") == 0;
-    if (!custom && strcmp(usb_string(root, "kind"), "camera") != 0) return false;
+    const char *kind_name = usb_string(root, "kind");
+    if (strcmp(kind_name, "animation") == 0) return receive_usb_animation(root);
+    const bool custom = strcmp(kind_name, "custom") == 0;
+    if (!custom && strcmp(kind_name, "camera") != 0) return false;
     int kind = custom ? 0 : 1;
     const uint32_t total = custom ? CUSTOM_IMAGE_BYTES : BAMBU_CAMERA_BYTES;
     cJSON *offset_value = cJSON_GetObjectItemCaseSensitive(root, "offset");
@@ -1191,6 +1338,7 @@ static void process_usb(cJSON *request)
                 s_bridge_online = true;
                 s_bridge_failures = 0;
                 if (!connectivity_custom_image_data(s_work_snapshot.custom_image_revision)) s_work_snapshot.custom_image_available = false;
+                if (!connectivity_custom_animation_data(s_work_snapshot.custom_animation_revision, NULL)) s_work_snapshot.custom_animation_available = false;
                 use_ready_camera_frame(&s_work_snapshot);
                 app_state_tasks_publish(s_work_tasks, s_work_task_count);
                 s_last_snapshot = s_work_snapshot;
@@ -1230,6 +1378,7 @@ static void process_usb(cJSON *request)
     cJSON_AddNumberToObject(response, "reset_reason", esp_reset_reason());
     cJSON_AddNumberToObject(response, "free_internal", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(response, "custom_revision", s_custom_image_active >= 0 ? s_custom_image_revisions[s_custom_image_active] : 0);
+    cJSON_AddNumberToObject(response, "animation_revision", s_custom_animation_revision);
     cJSON_AddNumberToObject(response, "camera_revision", s_bambu_camera_active >= 0 ? s_bambu_camera_revisions[s_bambu_camera_active] : 0);
     usb_transport_send(response);
     cJSON_Delete(response);

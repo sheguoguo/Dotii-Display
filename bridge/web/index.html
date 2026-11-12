@@ -361,8 +361,7 @@
                   <label class="image-file-button" for="custom-image-file" data-i18n="选择文件">选择文件</label>
                   <span data-i18n="未选择文件">未选择文件</span>
                 </div>
-                <small id="custom-image-state"><span data-i18n="选择图片后可调整位置和大小。">选择图片后可调整位置和大小。</span></small>
-                <div class="image-controls">
+                <small id="custom-image-state"><span data-i18n="选择图片后可调整位置和大小。">选择图片后可调整位置和大小。</span></small>                <div class="image-controls">
                   <label class="check-row"><input id="custom-background-image" type="checkbox"><span><span data-i18n="显示图片">显示图片</span></span></label>
                   <div class="image-fit-field">
                     <span class="time-field-label" id="custom-image-fit-label"><span data-i18n="填充方式">填充方式</span></span>
@@ -381,6 +380,18 @@
                 <div class="field-group opacity-field">
                   <label for="custom-image-opacity"><span data-i18n="图片亮度">图片亮度 </span><output id="custom-image-opacity-output">70%</output></label>
                   <input id="custom-image-opacity" type="range" min="0" max="100" value="70">
+                </div>
+              </div>
+              <div class="image-upload-field">
+                <div class="upload-heading"><label for="custom-gif-file"><span data-i18n="上传 GIF 动画">上传 GIF 动画</span></label><span><span data-i18n="支持 GIF，上限 4 MB">支持 GIF，上限 4 MB</span></span></div>
+                <div class="image-file-picker">
+                  <input id="custom-gif-file" type="file" accept="image/gif">
+                  <label class="image-file-button" for="custom-gif-file" data-i18n="选择文件">选择文件</label>
+                  <span data-i18n="未选择文件">未选择文件</span>
+                </div>
+                <small id="custom-gif-state"><span data-i18n="上传 GIF 后，Dotii 的自定义页会循环播放动画，优先于静态图片。">上传 GIF 后，Dotii 的自定义页会循环播放动画，优先于静态图片。</span></small>
+                <div class="image-controls">
+                  <button class="quiet-button" id="custom-gif-clear" type="button"><span data-i18n="移除动画">移除动画</span></button>
                 </div>
               </div>
             </section>

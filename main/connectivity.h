@@ -14,5 +14,6 @@ void connectivity_get_summary(char *buffer, size_t buffer_size);
 void connectivity_get_ip(char *buffer, size_t buffer_size);
 void connectivity_get_bridge_summary(char *buffer, size_t buffer_size);
 const uint8_t *connectivity_custom_image_data(uint32_t revision);
+const uint8_t *connectivity_custom_animation_data(uint32_t revision, size_t *size);
 const uint8_t *connectivity_bambu_camera_data(uint32_t revision);
 bool connectivity_copy_bambu_camera(uint32_t revision, uint8_t *destination, size_t size);

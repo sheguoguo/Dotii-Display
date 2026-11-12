@@ -588,5 +588,20 @@
   "本机私有": "Local private install",
   "系统回退": "System fallback",
   "Codex CLI、App Server、账户、额度、用量与任务列表均可正常读取": "Codex CLI, App Server, account, limits, usage and task list are all accessible",
-  "部分只读接口检测失败：{0}": "Some read-only checks failed: {0}"
+  "部分只读接口检测失败：{0}": "Some read-only checks failed: {0}",
+  "上传 GIF 动画": "Upload GIF animation",
+  "支持 GIF，上限 4 MB": "GIF only, up to 4 MB",
+  "上传 GIF 后，Dotii 的自定义页会循环播放动画，优先于静态图片。": "Once uploaded, the Dotii custom page loops this animation and takes priority over the static image.",
+  "移除动画": "Remove animation",
+  "GIF 超过 4 MB 上限，请压缩后再上传。": "GIF is over the 4 MB limit. Compress it and try again.",
+  "GIF 超过 4 MB 上限": "GIF is over the 4 MB limit",
+  "正在上传 GIF": "Uploading GIF",
+  "GIF 上传失败": "GIF upload failed",
+  "GIF 上传失败，请重新选择。": "GIF upload failed. Choose the file again.",
+  "GIF 已上传": "GIF uploaded",
+  "正在移除动画": "Removing animation",
+  "移除失败": "Remove failed",
+  "移除失败，请重试。": "Remove failed. Try again.",
+  "动画已移除，Dotii 会回到静态画面。": "Animation removed. Dotii falls back to the static image.",
+  "动画已移除": "Animation removed"
 }

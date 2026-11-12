@@ -91,6 +91,7 @@ typedef struct {
     bool custom_enabled;
     bool dotii_enabled;
     bool custom_image_available;
+    bool custom_animation_available;
     bool custom_ring_enabled;
     bool codex_ui_dual_limit;
     bool bambu_configured;
@@ -129,6 +130,8 @@ typedef struct {
     uint32_t custom_ring_end;
     uint32_t custom_image_revision;
     uint32_t custom_image_size;
+    uint32_t custom_animation_revision;
+    uint32_t custom_animation_size;
     bambu_status_t bambu_status;
     dotii_expression_t dotii_expression;
     uint32_t dotii_state_duration_ms;

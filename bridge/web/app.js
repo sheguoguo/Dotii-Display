@@ -1611,6 +1611,57 @@ async function uploadCustomSource(file, successMessage = t("图片已裁切并�
   }
 }
 
+async function uploadCustomAnimation(file) {
+  if (!file) return;
+  const limit = 4 * 1024 * 1024;
+  if (file.size > limit) {
+    byId("custom-gif-file").value = "";
+    setText("custom-gif-state", t("GIF 超过 4 MB 上限，请压缩后再上传。"));
+    showToast(t("GIF 超过 4 MB 上限"));
+    return;
+  }
+  setText("custom-gif-state", t("正在上传 GIF"));
+  try {
+    const response = await fetch("/api/v1/admin/custom/animation", {
+      method: "POST",
+      headers: { "Content-Type": "image/gif" },
+      body: file,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || t("GIF 上传失败"));
+    setText(
+      "custom-gif-state",
+      tr`已上传 ${Math.round(result.animation_size / 1024)} KB，Dotii 会在几秒内开始循环播放。`,
+    );
+    showToast(t("GIF 已上传"));
+  } catch (error) {
+    setText("custom-gif-state", t("GIF 上传失败，请重新选择。"));
+    showToast(error.message || t("GIF 上传失败"));
+  } finally {
+    byId("custom-gif-file").value = "";
+  }
+}
+
+async function clearCustomAnimation() {
+  setText("custom-gif-state", t("正在移除动画"));
+  try {
+    const response = await fetch("/api/v1/admin/custom/animation/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.error || t("移除失败"));
+    }
+    setText("custom-gif-state", t("动画已移除，Dotii 会回到静态画面。"));
+    showToast(t("动画已移除"));
+  } catch (error) {
+    setText("custom-gif-state", t("移除失败，请重试。"));
+    showToast(error.message || t("移除失败"));
+  }
+}
+
 async function applyCrop() {
   if (!state.crop.image) return;
   const button = byId("apply-crop");
@@ -1773,6 +1824,8 @@ byId("firmware-flash").addEventListener("click", flashFirmware);
 byId("custom-form").addEventListener("submit", saveCustom);
 byId("custom-enabled").addEventListener("change", toggleCustom);
 byId("custom-image-file").addEventListener("change", (event) => openCropDialog(event.target.files?.[0]));
+byId("custom-gif-file").addEventListener("change", (event) => uploadCustomAnimation(event.target.files?.[0]));
+byId("custom-gif-clear").addEventListener("click", clearCustomAnimation);
 byId("custom-crop-zoom").addEventListener("input", (event) => {
   state.crop.zoom = Number(event.target.value) / 100;
   drawCropPreview();
