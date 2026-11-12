@@ -82,6 +82,23 @@ class CodexUiConfigTests(unittest.TestCase):
             ["codex_working", "bambu_printing", "codex_waiting_user"],
         )
 
+    def test_dotii_config_drops_retired_expressions_and_reassigns_their_states(self) -> None:
+        config = default_dotii_config()
+        config["animations"]["heart_eyes"]["states"].remove("codex_completed")
+        config["animations"]["cheeky"] = {"states": ["codex_completed"], "state_duration_ms": 0}
+        config["animations"]["laugh"] = {"states": ["codex_working"], "state_duration_ms": 0}
+        config["animations"]["smile"] = {"states": [], "state_duration_ms": 0}
+
+        migrated = validate_dotii_config(config)
+
+        self.assertNotIn("cheeky", migrated["animations"])
+        self.assertNotIn("laugh", migrated["animations"])
+        self.assertNotIn("smile", migrated["animations"])
+        # 原先已被现存表情接管的状态保持不动
+        self.assertIn("codex_working", migrated["animations"]["face_smile"]["states"])
+        # 只被 retired 表情占用的状态交回默认持有者，不会丢成"无表情"
+        self.assertIn("codex_completed", migrated["animations"]["heart_eyes"]["states"])
+
     def test_dotii_config_rejects_duplicate_business_states(self) -> None:
         duplicate = default_dotii_config()
         duplicate["animations"]["heart_eyes"]["states"].append("codex_working")

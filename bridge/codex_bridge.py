@@ -103,6 +103,9 @@ DOTII_EXPRESSION_IDS = (
 )
 DOTII_EXPRESSIONS = set(DOTII_EXPRESSION_IDS)
 DOTII_LEGACY_EXPRESSIONS = {"happy"}
+# 已从固件移除的手绘表情。老配置文件里可能还留着这些键，
+# 读取时直接丢弃，并把它们原先占用的状态交回默认持有者。
+DOTII_RETIRED_EXPRESSIONS = {"cheeky", "smile", "laugh"}
 DOTII_FIXED_EXPRESSION_IDS = (
     "idle_breath", "blink", "sleepy_yawn", "touch_response", "connecting",
 )
@@ -489,6 +492,18 @@ def validate_dotii_config(payload: Any) -> dict[str, Any]:
     # 老配置文件里没有新增的可爱表情（heart_eyes / face_*）。
     # 只补空槽位、不自动占用状态，避免旧用户因缺键直接 500。
     animations = dict(animations)
+    retired_states: set[str] = set()
+    for retired in DOTII_RETIRED_EXPRESSIONS:
+        retired_entry = animations.pop(retired, None)
+        if not isinstance(retired_entry, dict):
+            continue
+        retired_assignments = retired_entry.get("states")
+        if not isinstance(retired_assignments, list):
+            continue
+        for state_id in retired_assignments:
+            if not isinstance(state_id, str):
+                continue
+            retired_states.update(DOTII_LEGACY_STATE_EXPANSIONS.get(state_id, (state_id,)))
     for expression_id in DOTII_EXPRESSION_IDS:
         animations.setdefault(expression_id, {"states": [], "state_duration_ms": 0})
 
@@ -535,6 +550,16 @@ def validate_dotii_config(payload: Any) -> dict[str, Any]:
             DOTII_DEFAULT_BUSINESS_EXPRESSION[state_id]
         )
         validated_animations[expression_id]["states"].append(state_id)
+
+    # 被移除表情原先占用的状态若没人接管，交回默认持有者，
+    # 避免升级后这些状态退化成"无表情"。用户显式解绑不算迁移，不受影响。
+    for state_id in sorted(retired_states):
+        if state_id in assigned_states:
+            continue
+        default_expression = DOTII_DEFAULT_BUSINESS_EXPRESSION.get(state_id)
+        if default_expression is None:
+            continue
+        validated_animations[default_expression]["states"].append(state_id)
 
     for expression_id in DOTII_BUSINESS_EXPRESSION_IDS:
         candidate = candidates[expression_id]
