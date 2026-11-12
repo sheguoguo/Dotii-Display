@@ -121,6 +121,12 @@ static lv_obj_t *s_settings_ip;
 static lv_obj_t *s_settings_bridge;
 static lv_obj_t *s_settings_reset_button;
 static lv_obj_t *s_settings_reset_detail;
+/* 久坐提醒设置页的屏幕与状态：必须在 return_from_current 之前声明。 */
+static lv_obj_t *s_reminder_setup;
+static bool s_reminder_running;
+static bool s_reminder_paused;
+static uint32_t s_reminder_remaining_ms;
+static uint32_t s_reminder_tick_ms;
 static lv_obj_t *s_brightness_slider;
 static lv_obj_t *s_custom_ring;
 static lv_obj_t *s_custom_image;
@@ -459,6 +465,7 @@ static void return_from_current(void)
     if (s_current == s_detail) load_screen(enabled_return_screen(page_screen(1)), false);
     else if (s_current == s_bambu_detail) load_screen(enabled_return_screen(s_bambu_main), false);
     else if (s_current == s_settings) load_screen(first_enabled_screen(), false);
+    else if (s_current == s_reminder_setup) load_screen(first_enabled_screen(), false);
     else if (s_current == s_power) load_screen(enabled_return_screen(s_before_power), false);
 }
 
@@ -536,17 +543,29 @@ static void screen_off(void)
  * 触摸或按键可确认（dismiss），计时器随即重新开始。全部在设备本地完成，
  * 不依赖电脑或网络。 */
 #define REMINDER_DEFAULT_MINUTES 60
+#define REMINDER_MIN_MINUTES 5
+#define REMINDER_MAX_MINUTES 120
+#define REMINDER_MINUTE_STEP 5
 #define REMINDER_FLASH_PERIOD_MS 400
 
 static lv_obj_t *s_reminder;
 static lv_obj_t *s_reminder_title;
 static lv_obj_t *s_reminder_body;
-static bool s_reminder_active;
 static bool s_reminder_visible;
-static uint32_t s_reminder_due_ms;
 static uint32_t s_reminder_flash_ms;
 static bool s_reminder_flash_on;
 static uint32_t s_reminder_minutes = REMINDER_DEFAULT_MINUTES;
+
+/* 设置页控件：idle 状态显示开关 + 分钟调节 + 开始，running 状态显示倒计时。
+   两套控件都常驻，靠显隐切换，避免运行时反复创建对象。 */
+static lv_obj_t *s_reminder_idle_box;
+static lv_obj_t *s_reminder_run_box;
+static lv_obj_t *s_reminder_switch;
+static lv_obj_t *s_reminder_minutes_label;
+static lv_obj_t *s_reminder_countdown_minutes;
+static lv_obj_t *s_reminder_countdown_seconds;
+static lv_obj_t *s_reminder_state_label;
+static lv_obj_t *s_settings_reminder_detail;
 
 static void render_reminder_flash(void)
 {
@@ -577,25 +596,154 @@ static void show_reminder(void)
     load_screen(s_reminder, true);
 }
 
+/* ---- 倒计时状态机：以"剩余毫秒"为准，运行中按增量扣减 ----------------
+   不存绝对到期时刻，暂停/继续只需重置增量基准，避免累积误差。 */
+static void reminder_render(void)
+{
+    if (s_reminder_setup == NULL) return;
+    const uint32_t total_seconds = (s_reminder_remaining_ms + 999u) / 1000u;
+    if (s_reminder_running) {
+        lv_obj_add_flag(s_reminder_idle_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(s_reminder_run_box, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text_fmt(s_reminder_countdown_minutes, "%02u",
+                              (unsigned)(total_seconds / 60u));
+        lv_label_set_text_fmt(s_reminder_countdown_seconds, "%02u",
+                              (unsigned)(total_seconds % 60u));
+        lv_label_set_text(s_reminder_state_label,
+                          s_reminder_paused ? ui_tr("已暂停 · 点击继续") : ui_tr("点击暂停"));
+        lv_obj_set_style_text_color(s_reminder_state_label,
+                                    color(s_reminder_paused ? COLOR_WARNING : COLOR_MUTED), 0);
+    } else {
+        lv_obj_remove_flag(s_reminder_idle_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_reminder_run_box, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text_fmt(s_reminder_minutes_label, ui_tr("%u 分钟"),
+                              (unsigned)s_reminder_minutes);
+    }
+    if (s_reminder_switch != NULL) {
+        if (s_reminder_running) lv_obj_add_state(s_reminder_switch, LV_STATE_CHECKED);
+        else lv_obj_remove_state(s_reminder_switch, LV_STATE_CHECKED);
+    }
+    if (s_settings_reminder_detail != NULL) {
+        if (s_reminder_running) {
+            lv_label_set_text_fmt(s_settings_reminder_detail, ui_tr("倒计时 %02u:%02u"),
+                                  (unsigned)(total_seconds / 60u),
+                                  (unsigned)(total_seconds % 60u));
+        } else {
+            lv_label_set_text_fmt(s_settings_reminder_detail, ui_tr("已停止 · %u 分钟"),
+                                  (unsigned)s_reminder_minutes);
+        }
+    }
+}
+
+static void reminder_start(void)
+{
+    s_reminder_running = true;
+    s_reminder_paused = false;
+    s_reminder_remaining_ms = s_reminder_minutes * 60u * 1000u;
+    s_reminder_tick_ms = lv_tick_get();
+    reminder_render();
+}
+
+static void reminder_stop(void)
+{
+    s_reminder_running = false;
+    s_reminder_paused = false;
+    s_reminder_remaining_ms = s_reminder_minutes * 60u * 1000u;
+    reminder_render();
+}
+
+static void reminder_sync(void)
+{
+    if (!s_reminder_running || s_reminder_paused) return;
+    const uint32_t now = lv_tick_get();
+    const uint32_t elapsed = now - s_reminder_tick_ms;
+    s_reminder_tick_ms = now;
+    s_reminder_remaining_ms = elapsed >= s_reminder_remaining_ms
+        ? 0 : s_reminder_remaining_ms - elapsed;
+}
+
+static void reminder_toggle_pause(void)
+{
+    if (!s_reminder_running) return;
+    if (s_reminder_paused) {
+        s_reminder_tick_ms = lv_tick_get();
+        s_reminder_paused = false;
+    } else {
+        reminder_sync();
+        s_reminder_paused = true;
+    }
+    reminder_render();
+}
+
+static void reminder_switch_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+    if (lv_obj_has_state(s_reminder_switch, LV_STATE_CHECKED)) reminder_start();
+    else reminder_stop();
+}
+
+static void reminder_minutes_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED || s_reminder_running) return;
+    const int delta = (int)(intptr_t)lv_event_get_user_data(event);
+    int next = (int)s_reminder_minutes + delta;
+    if (next < REMINDER_MIN_MINUTES) next = REMINDER_MIN_MINUTES;
+    if (next > REMINDER_MAX_MINUTES) next = REMINDER_MAX_MINUTES;
+    s_reminder_minutes = (uint32_t)next;
+    s_reminder_remaining_ms = s_reminder_minutes * 60u * 1000u;
+    reminder_render();
+}
+
+static void reminder_start_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    reminder_start();
+}
+
+static void reminder_stop_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    reminder_stop();
+}
+
+static void reminder_pause_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    reminder_toggle_pause();
+}
+
+static void reminder_setup_entry(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    reminder_render();
+    load_screen(s_reminder_setup, true);
+}
+
 static void dismiss_reminder(void)
 {
-    if (!s_reminder_active) return;
-    s_reminder_active = false;
+    if (!s_reminder_visible) return;
     s_reminder_visible = false;
     s_reminder_flash_on = false;
-    s_reminder_due_ms = lv_tick_get() + s_reminder_minutes * 60u * 1000u;
+    /* 确认后直接进入下一轮，省得用户再回设置页点一次开始。 */
+    reminder_start();
     load_screen(first_enabled_screen(), false);
 }
 
 static void reminder_timer(lv_timer_t *timer)
 {
     (void)timer;
-    uint32_t now = lv_tick_get();
-    if (!s_reminder_active && now >= s_reminder_due_ms) {
-        s_reminder_active = true;
-        s_reminder_flash_ms = now;
-        show_reminder();
-        return;
+    const uint32_t now = lv_tick_get();
+    if (s_reminder_running && !s_reminder_paused) {
+        reminder_sync();
+        if (s_reminder_remaining_ms == 0 && !s_reminder_visible) {
+            s_reminder_running = false;
+            s_reminder_flash_ms = now;
+            show_reminder();
+            reminder_render();
+            return;
+        }
+        /* 只在设置页可见时刷新秒数，其他页面由设置卡片自己显示。 */
+        if (s_current == s_reminder_setup || s_current == s_settings) reminder_render();
     }
     if (!s_reminder_visible) return;
     /* 只翻转底色，不改写 s_last_activity：后者是"屏幕无操作"的时钟，
@@ -638,6 +786,127 @@ static void build_reminder(void)
 
     lv_obj_t *hint = make_label(s_reminder, ui_tr("触摸屏幕继续"), &s_ui_font, 0x8A4A36);
     lv_obj_align(hint, LV_ALIGN_CENTER, 0, 80);
+}
+
+static void build_reminder_setup(void)
+{
+    s_reminder_setup = lv_obj_create(NULL);
+    set_screen_background(s_reminder_setup);
+    add_activity_event(s_reminder_setup);
+    lv_obj_add_event_cb(s_reminder_setup, swipe_event, LV_EVENT_GESTURE, NULL);
+
+    lv_obj_t *safe = make_safe(s_reminder_setup);
+    make_centered_title(safe, ui_tr("久坐提醒"), &ui_font_detail_20, 336, 256, 1, -2);
+
+    /* ---- 未开始：开关 + 分钟调节 + 开始 ---- */
+    s_reminder_idle_box = lv_obj_create(safe);
+    lv_obj_remove_style_all(s_reminder_idle_box);
+    lv_obj_set_size(s_reminder_idle_box, 334, 292);
+    lv_obj_align(s_reminder_idle_box, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_flex_flow(s_reminder_idle_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_reminder_idle_box, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(s_reminder_idle_box, 14, 0);
+    lv_obj_remove_flag(s_reminder_idle_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *switch_row = lv_obj_create(s_reminder_idle_box);
+    lv_obj_remove_style_all(switch_row);
+    lv_obj_set_size(switch_row, LV_PCT(100), 58);
+    lv_obj_set_style_radius(switch_row, 18, 0);
+    lv_obj_set_style_bg_color(switch_row, color(COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(switch_row, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(switch_row, 18, 0);
+    lv_obj_remove_flag(switch_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *switch_text = make_label(switch_row, ui_tr("启用计时"), &ui_font_detail_20, COLOR_TEXT);
+    lv_obj_align(switch_text, LV_ALIGN_LEFT_MID, 0, 0);
+    s_reminder_switch = lv_switch_create(switch_row);
+    lv_obj_set_size(s_reminder_switch, 66, 36);
+    lv_obj_align(s_reminder_switch, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(s_reminder_switch, reminder_switch_event, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *minutes_row = lv_obj_create(s_reminder_idle_box);
+    lv_obj_remove_style_all(minutes_row);
+    lv_obj_set_size(minutes_row, LV_PCT(100), 58);
+    lv_obj_set_style_radius(minutes_row, 18, 0);
+    lv_obj_set_style_bg_color(minutes_row, color(COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(minutes_row, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(minutes_row, 12, 0);
+    lv_obj_remove_flag(minutes_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *minus = lv_button_create(minutes_row);
+    lv_obj_set_size(minus, 46, 46);
+    lv_obj_set_style_radius(minus, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(minus, color(0x232B29), 0);
+    lv_obj_set_style_bg_color(minus, color(0x323C39), LV_STATE_PRESSED);
+    lv_obj_align(minus, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *minus_text = make_label(minus, "-", &ui_font_digits_64, COLOR_TEXT);
+    lv_obj_center(minus_text);
+    lv_obj_add_event_cb(minus, reminder_minutes_event, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)(-REMINDER_MINUTE_STEP));
+
+    s_reminder_minutes_label = make_label(minutes_row, ui_tr("60 分钟"), &ui_font_detail_20, COLOR_TEXT);
+    lv_obj_center(s_reminder_minutes_label);
+
+    lv_obj_t *plus = lv_button_create(minutes_row);
+    lv_obj_set_size(plus, 46, 46);
+    lv_obj_set_style_radius(plus, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(plus, color(0x232B29), 0);
+    lv_obj_set_style_bg_color(plus, color(0x323C39), LV_STATE_PRESSED);
+    lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_t *plus_text = make_label(plus, "+", &ui_font_digits_64, COLOR_TEXT);
+    lv_obj_center(plus_text);
+    lv_obj_add_event_cb(plus, reminder_minutes_event, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)REMINDER_MINUTE_STEP);
+
+    lv_obj_t *start = lv_button_create(s_reminder_idle_box);
+    lv_obj_set_size(start, 210, 58);
+    lv_obj_set_style_radius(start, 20, 0);
+    lv_obj_set_style_bg_color(start, color(COLOR_BLUE_DARK), 0);
+    lv_obj_t *start_text = make_label(start, ui_tr("开始计时"), &ui_font_detail_20, COLOR_TEXT);
+    lv_obj_center(start_text);
+    lv_obj_add_event_cb(start, reminder_start_event, LV_EVENT_CLICKED, NULL);
+
+    /* ---- 计时中：倒计时大字 + 点击暂停 + 停止 ---- */
+    s_reminder_run_box = lv_obj_create(safe);
+    lv_obj_remove_style_all(s_reminder_run_box);
+    lv_obj_set_size(s_reminder_run_box, 334, 292);
+    lv_obj_align(s_reminder_run_box, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_flex_flow(s_reminder_run_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_reminder_run_box, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(s_reminder_run_box, 10, 0);
+    lv_obj_remove_flag(s_reminder_run_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_reminder_run_box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_reminder_run_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_reminder_run_box, reminder_pause_event, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *clock_row = lv_obj_create(s_reminder_run_box);
+    lv_obj_remove_style_all(clock_row);
+    lv_obj_set_size(clock_row, LV_PCT(100), 86);
+    lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(clock_row, 6, 0);
+    lv_obj_remove_flag(clock_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(clock_row, LV_OBJ_FLAG_CLICKABLE);
+
+    s_reminder_countdown_minutes = make_label(clock_row, "60", &ui_font_digits_64, COLOR_TEXT);
+    lv_obj_t *colon = make_label(clock_row, ":", &ui_font_detail_20, COLOR_MUTED);
+    lv_obj_set_style_transform_scale(colon, 600, 0);
+    s_reminder_countdown_seconds = make_label(clock_row, "00", &ui_font_digits_64, COLOR_TEXT);
+
+    s_reminder_state_label = make_label(s_reminder_run_box, ui_tr("点击暂停"), &s_ui_font, COLOR_MUTED);
+
+    lv_obj_t *stop = lv_button_create(s_reminder_run_box);
+    lv_obj_set_size(stop, 170, 52);
+    lv_obj_set_style_radius(stop, 18, 0);
+    lv_obj_set_style_bg_color(stop, color(0x3A1F1D), 0);
+    lv_obj_set_style_bg_color(stop, color(0x4E2A26), LV_STATE_PRESSED);
+    lv_obj_t *stop_text = make_label(stop, ui_tr("停止"), &ui_font_detail_20, COLOR_DANGER);
+    lv_obj_center(stop_text);
+    lv_obj_add_event_cb(stop, reminder_stop_event, LV_EVENT_CLICKED, NULL);
+
+    reminder_render();
 }
 
 static void screen_wake(void)
@@ -2261,6 +2530,18 @@ static lv_obj_t *make_setting_card(lv_obj_t *parent, const char *title, const ch
     return detail_label;
 }
 
+/* 可点击的设置卡片：复用 make_setting_card 的外观，返回详情标签供实时刷新。 */
+static lv_obj_t *make_setting_entry(lv_obj_t *parent, const char *title, const char *detail,
+                                    lv_event_cb_t callback)
+{
+    lv_obj_t *detail_label = make_setting_card(parent, title, detail);
+    lv_obj_t *card = lv_obj_get_parent(detail_label);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(card, color(0x1F2927), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(card, callback, LV_EVENT_CLICKED, NULL);
+    return detail_label;
+}
+
 static void build_settings(void)
 {
     s_settings = lv_obj_create(NULL);
@@ -2287,6 +2568,9 @@ static void build_settings(void)
     lv_obj_center(refresh_text);
     lv_obj_add_event_cb(refresh, refresh_clicked, LV_EVENT_CLICKED, NULL);
 
+    s_settings_reminder_detail = make_setting_entry(s_settings_list, ui_tr("久坐提醒"),
+                                                    ui_tr("已停止 · 60 分钟"),
+                                                    reminder_setup_entry);
     s_settings_wifi = make_setting_card(s_settings_list, ui_tr("网络"), ui_tr("未配置"));
     s_settings_ip = make_setting_card(s_settings_list, ui_tr("设备地址"), "IP --");
     s_settings_bridge = make_setting_card(s_settings_list, ui_tr("Codex 数据源"), ui_tr("未配置"));
@@ -2684,6 +2968,7 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     build_custom();
     build_dotii();
     build_reminder();
+    build_reminder_setup();
     build_settings();
     build_control();
     build_power();
@@ -2707,8 +2992,8 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     /* The compact geometric character uses eight 100 ms phases. */
     lv_timer_create(dotii_timer, 100, NULL);
     /* 久坐提醒：100 ms 轮询，既用于到点触发，也用于闪屏节奏。 */
-    s_reminder_active = false;
-    s_reminder_due_ms = lv_tick_get() + s_reminder_minutes * 60u * 1000u;
+    /* 久坐提醒默认停止，由设置页手动开始，不再开机自动计时。 */
+    reminder_stop();
     lv_timer_create(reminder_timer, 100, NULL);
 }
 
@@ -2732,7 +3017,7 @@ void state_ui_button_a_short(void)
         load_screen_with_transition(enabled_return_screen(s_before_control), TRANSITION_CONTROL_UP);
         return;
     }
-    if (s_current == s_settings) {
+    if (s_current == s_settings || s_current == s_reminder_setup) {
         load_screen(first_enabled_screen(), false);
         return;
     }
