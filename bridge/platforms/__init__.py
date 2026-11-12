@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from .base import PlatformAdapter
 
 if TYPE_CHECKING:
+    from .linux import LinuxPlatformAdapter
     from .macos import MacOSPlatformAdapter
     from .windows import WindowsPlatformAdapter
 
@@ -23,6 +24,10 @@ def current_platform() -> PlatformAdapter:
         from .macos import MacOSPlatformAdapter
 
         return MacOSPlatformAdapter()
+    if sys.platform.startswith("linux"):
+        from .linux import LinuxPlatformAdapter
+
+        return LinuxPlatformAdapter()
     raise RuntimeError(f"Dotii 管理中心暂不支持当前平台：{sys.platform}")
 
 

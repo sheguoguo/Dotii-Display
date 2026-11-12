@@ -1,0 +1,17 @@
+[Unit]
+Description=Dotii 管理中心（后台桥接与网页管理台）
+Documentation=https://127.0.0.1:@PORT@
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@VENV@/bin/python -B @BRIDGE@/codex_bridge.py --app-server --port @PORT@
+Restart=on-failure
+RestartSec=3
+# 关掉 Python 缓冲，日志能即时进 journalctl
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
