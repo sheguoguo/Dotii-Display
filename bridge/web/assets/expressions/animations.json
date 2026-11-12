@@ -32,8 +32,8 @@
         100
       ],
       "loop": true,
-      "bytes": 11388,
-      "sha256": "a29dc33d1f8f5e29e4101684ba058f9a67eb951d02724e95ee00c85d77307546"
+      "bytes": 11394,
+      "sha256": "079115aa9f4ca1272d9e8f484abd86f52d49391e7d5f3b3c4955673e3c8a2bd9"
     },
     {
       "id": "blink",
@@ -57,8 +57,8 @@
         100
       ],
       "loop": true,
-      "bytes": 5676,
-      "sha256": "001b7ded378a69721328d96527938d45c15ea76f6703f4c4a29cf2e1bc760143"
+      "bytes": 5664,
+      "sha256": "fefec8967121f8adab8a6f0df5506e39f5fc3b236a9aed95b9b8f86367754d63"
     },
     {
       "id": "curious",
@@ -82,8 +82,8 @@
         100
       ],
       "loop": true,
-      "bytes": 6416,
-      "sha256": "061f3601b31beab910f484dc87c8d037dacd8e5cee35b3014334758e50dafd7a"
+      "bytes": 6410,
+      "sha256": "2968140984bd87381b65364ffb148c4cacc0ae2ca764fcb67430a7d73c608a37"
     },
     {
       "id": "sleepy_yawn",
@@ -107,8 +107,8 @@
         100
       ],
       "loop": true,
-      "bytes": 5508,
-      "sha256": "fba7398018dd3ffbf8cfa5aaf282a33cd9522c55ca74beb9e5a761ad2f47b9be"
+      "bytes": 5510,
+      "sha256": "7828af2876abd0adfbaf0356afaf17246a128a64d1561a2ecfcb7f9b40b7ac3d"
     },
     {
       "id": "touch_response",
@@ -132,8 +132,8 @@
         100
       ],
       "loop": true,
-      "bytes": 21516,
-      "sha256": "db9d8a1776cf7278502856204f7f4d640b7b2283fa6024f1855d993f901b2947"
+      "bytes": 21554,
+      "sha256": "f0ba2af7f1b65fa8e817afbd892e518da964bc50a8465b78679fc1a5e9137933"
     },
     {
       "id": "connecting",
@@ -157,8 +157,8 @@
         100
       ],
       "loop": true,
-      "bytes": 7240,
-      "sha256": "0760b441f3246b592d10ede80e62da07710c0db3242e1498cdbd7b97c1f9764a"
+      "bytes": 7254,
+      "sha256": "20f76aa8a8d5ad820d5789564198039b2277e487539b10e30ec7bfa540094115"
     },
     {
       "id": "working",
@@ -182,8 +182,8 @@
         100
       ],
       "loop": true,
-      "bytes": 13516,
-      "sha256": "3294de06674d8e9d452cfb13508136c0b429404267e7a740e6ea57eaa8cbc130"
+      "bytes": 13528,
+      "sha256": "ef127307a0b8f2d2fa052de0dad485c82583733da89c9f57991f3b9d0610cf51"
     },
     {
       "id": "complete",
@@ -207,8 +207,8 @@
         100
       ],
       "loop": true,
-      "bytes": 10100,
-      "sha256": "63cc076bd0459d182c984d162320c4f9d4656da054762a382b89a3e66c08da7a"
+      "bytes": 10106,
+      "sha256": "9780306444289e191f7aaf937c80adff600ae891170ee6ce390387127343bc36"
     },
     {
       "id": "failure",
@@ -232,8 +232,108 @@
         100
       ],
       "loop": true,
-      "bytes": 5918,
-      "sha256": "de0c05a05fc38a304299edf6d9309ea69f31c7373ea5e272ece62fddd4641346"
+      "bytes": 5920,
+      "sha256": "5576e3d01a0829bc21567504a35b29ec88186220741b349486657fe1edb1e23c"
+    },
+    {
+      "id": "heart_eyes",
+      "label": "心心眼",
+      "purpose": "任务完成、被夸奖",
+      "src": "/assets/expressions/dotii-heart-eyes.webp",
+      "format": "animated_webp",
+      "canvas": [
+        466,
+        466
+      ],
+      "frame_count": 8,
+      "durations_ms": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ],
+      "loop": true,
+      "bytes": 24074,
+      "sha256": "26f1305a9d6edc144cf10606d27a711790766e998fcdad989ae6c346d5abe790"
+    },
+    {
+      "id": "cheeky",
+      "label": "调皮",
+      "purpose": "等待操作、被点一下",
+      "src": "/assets/expressions/dotii-cheeky.webp",
+      "format": "animated_webp",
+      "canvas": [
+        466,
+        466
+      ],
+      "frame_count": 8,
+      "durations_ms": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ],
+      "loop": true,
+      "bytes": 8958,
+      "sha256": "984a37dcae2f9371d906e2feae71688078dd38a560ad742ff4ff62e244daaf87"
+    },
+    {
+      "id": "smile",
+      "label": "微笑",
+      "purpose": "空闲待机基础脸",
+      "src": "/assets/expressions/dotii-smile.webp",
+      "format": "animated_webp",
+      "canvas": [
+        466,
+        466
+      ],
+      "frame_count": 8,
+      "durations_ms": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ],
+      "loop": true,
+      "bytes": 12900,
+      "sha256": "1a7ea8588f5b4759da98b9d2cb0b49ce02302938b61be2ecab193f53ecd85c94"
+    },
+    {
+      "id": "laugh",
+      "label": "大笑",
+      "purpose": "工作中、打印中",
+      "src": "/assets/expressions/dotii-laugh.webp",
+      "format": "animated_webp",
+      "canvas": [
+        466,
+        466
+      ],
+      "frame_count": 8,
+      "durations_ms": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ],
+      "loop": true,
+      "bytes": 16736,
+      "sha256": "200571cf03d076741ccddb588d75706ca3df508ecc8fb7383608ef26fcd61127"
     }
   ],
   "style": "photo_geometric_v2"

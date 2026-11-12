@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -35,23 +36,98 @@ def part_box(width: int, height: int, x: int, y: int) -> tuple[int, int, int, in
     return left, top, left + width, top + height
 
 
-def draw_parts(parts: list[tuple[int, int, int, int, tuple[int, int, int]]]) -> Image.Image:
+def draw_parts(parts: list[tuple], specials: list[tuple] | None = None) -> Image.Image:
     glow = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0, 0))
     core = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow)
     core_draw = ImageDraw.Draw(core)
-    for width, height, x, y, color in parts:
+    for part in parts:
+        width, height, x, y, color = part[:5]
+        alpha = part[5] if len(part) > 5 else 255
         width = scale_face_value(width)
         height = scale_face_value(height)
         x = scale_face_value(x)
         y = scale_face_value(y)
         box = part_box(width, height, x, y)
         radius = min(width, height) // 2
-        glow_draw.rounded_rectangle(box, radius=radius, fill=(*color, 105))
-        core_draw.rounded_rectangle(box, radius=radius, fill=(*color, 255))
+        glow_draw.rounded_rectangle(box, radius=radius, fill=(*color, min(105, alpha)))
+        core_draw.rounded_rectangle(box, radius=radius, fill=(*color, alpha))
+    if specials:
+        draw_specials(glow_draw, core_draw, specials)
     base = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0, 255))
     base = Image.alpha_composite(base, glow.filter(ImageFilter.GaussianBlur(7)))
     return Image.alpha_composite(base, core).convert("RGB")
+
+
+def arc_box(x: int, y: int, diameter: int) -> tuple[float, float, float, float]:
+    diameter = scale_face_value(diameter)
+    x = scale_face_value(x)
+    y = scale_face_value(y)
+    cx = CENTER + x
+    cy = CENTER + y
+    half = diameter / 2
+    return (cx - half, cy - half, cx + half, cy + half)
+
+
+def draw_specials(
+    glow_draw: ImageDraw.ImageDraw,
+    core_draw: ImageDraw.ImageDraw,
+    specials: list[tuple],
+) -> None:
+    for item in specials:
+        kind = item[0]
+        if kind == "arc":
+            _, x, y, diameter, thickness, color, start, end = item
+            width = max(1, scale_face_value(thickness))
+            box = arc_box(x, y, diameter)
+            glow_draw.arc(box, start, end, fill=(*color, 105), width=width + 4)
+            core_draw.arc(box, start, end, fill=(*color, 255), width=width)
+            # PIL 的 arc 是方头，固件用 rounded 端点；这里补两个圆帽对齐观感。
+            radius = (box[2] - box[0]) / 2
+            center_x = (box[0] + box[2]) / 2
+            center_y = (box[1] + box[3]) / 2
+            cap = width / 2
+            for angle in (start, end):
+                radians = math.radians(angle)
+                px = center_x + radius * math.cos(radians)
+                py = center_y + radius * math.sin(radians)
+                glow_draw.ellipse((px - cap, py - cap, px + cap, py + cap), fill=(*color, 105))
+                core_draw.ellipse((px - cap, py - cap, px + cap, py + cap), fill=(*color, 255))
+        elif kind == "heart":
+            _, x, y, size, color = item
+            cx = CENTER + scale_face_value(x)
+            cy = CENTER + scale_face_value(y)
+            radius = scale_face_value(18)
+            offset = scale_face_value(13)
+            half = scale_face_value(25)
+            for sign in (-1, 1):
+                lx = cx + sign * offset - radius
+                ly = cy - offset - radius
+                glow_draw.ellipse((lx, ly, lx + radius * 2, ly + radius * 2), fill=(*color, 105))
+                core_draw.ellipse((lx, ly, lx + radius * 2, ly + radius * 2), fill=(*color, 255))
+            diamond = [(cx, cy - half), (cx + half, cy), (cx, cy + half), (cx - half, cy)]
+            glow_draw.polygon(diamond, fill=(*color, 105))
+            core_draw.polygon(diamond, fill=(*color, 255))
+        elif kind == "semi":
+            _, x, y, width, height, color = item
+            # y 是平顶位置，向下取半椭圆；box 上沿要上移一个 height，
+            # 否则 pieslice 的下半部分会整体下移一档。
+            cx = CENTER + scale_face_value(x)
+            top = CENTER + scale_face_value(y)
+            half_w = scale_face_value(width) / 2
+            half_h = scale_face_value(height)
+            box = (cx - half_w, top - half_h, cx + half_w, top + half_h)
+            glow_draw.pieslice(box, 0, 180, fill=(*color, 105))
+            core_draw.pieslice(box, 0, 180, fill=(*color, 255))
+        elif kind == "ellipse":
+            _, x, y, width, height, color = item
+            cx = CENTER + scale_face_value(x)
+            cy = CENTER + scale_face_value(y)
+            half_w = scale_face_value(width) / 2
+            half_h = scale_face_value(height) / 2
+            box = (cx - half_w, cy - half_h, cx + half_w, cy + half_h)
+            glow_draw.ellipse(box, fill=(*color, 105))
+            core_draw.ellipse(box, fill=(*color, 255))
 
 
 def frame_parts(expression: str, phase: int) -> list[tuple[int, int, int, int, tuple[int, int, int]]]:
@@ -102,14 +178,53 @@ def frame_parts(expression: str, phase: int) -> list[tuple[int, int, int, int, t
         return [(58, 12, -76, -22, CORAL), (58, 12, 76, -22, CORAL),
                 (72, 12, 0, 80 + wave // 2, CORAL),
                 (10 + wave, 10 + wave, 0, 52, CORAL)]
+    if expression == "heart_eyes":
+        mouth = 22 + wave
+        return [(mouth, mouth, 0, 63, AMBER),
+                (12, 12, -136, -102 + wave, CORAL),
+                (12, 12, 136, -102 + wave, CYAN)]
+    if expression == "cheeky":
+        scan = wave * 4
+        return [(58, 12, -65, -29, WARM),
+                (40, 64, 57 + scan // 4, -17, WARM),
+                (40, 13, 19, 53, AMBER),
+                (18, 18, 39, 63, CORAL),
+                (11, 11, 92, -85, CYAN)]
+    if expression == "smile":
+        return [(39, 24, -102, 29, CORAL, 120),
+                (39, 24, 102, 29, CORAL, 120)]
+    if expression == "laugh":
+        return [(39, 24, -112, -10, CORAL, 110),
+                (39, 24, 112, -10, CORAL, 110),
+                (12, 12, 136, -100, CYAN)]
     raise ValueError(f"Unknown Dotii expression: {expression}")
+
+
+def frame_specials(expression: str, phase: int) -> list[tuple]:
+    """弧线与心形没有矩形图元可表达，单独走 PIL 的 arc / polygon。"""
+    wave = phase if phase < 4 else 8 - phase
+    if expression == "heart_eyes":
+        return [("heart", -65, -29 + wave - 2, 64, CORAL),
+                ("heart", 65, -29 + wave - 2, 64, CORAL)]
+    if expression == "smile":
+        return [("arc", -65, -29 + wave // 2, 68, 12, WARM, 225, 315),
+                ("arc", 65, -29 + wave // 2, 68, 12, WARM, 225, 315),
+                ("arc", 0, 52, 72, 12, AMBER, 30, 150)]
+    if expression == "laugh":
+        visible = 42 + wave * 3
+        return [("arc", -65, -29, 68, 12, WARM, 225, 315),
+                ("arc", 65, -29, 68, 12, WARM, 225, 315),
+                ("semi", 0, 30, 104, visible, AMBER),
+                ("ellipse", 0, 30 + visible * 68 // 100, 34, 22, CORAL)]
+    return []
 
 
 def main() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     for animation in manifest["animations"]:
         expression = animation["id"]
-        frames = [draw_parts(frame_parts(expression, phase)) for phase in range(8)]
+        frames = [draw_parts(frame_parts(expression, phase), frame_specials(expression, phase))
+                  for phase in range(8)]
         # WebP may coalesce adjacent identical geometric phases (notably the
         # closed-eye hold). Preserve the eight-phase contract with a unique,
         # effectively black marker inside the round-screen safe area.
