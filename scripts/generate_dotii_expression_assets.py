@@ -44,12 +44,24 @@ def draw_parts(parts: list[tuple], specials: list[tuple] | None = None) -> Image
     for part in parts:
         width, height, x, y, color = part[:5]
         alpha = part[5] if len(part) > 5 else 255
+        angle = part[6] if len(part) > 6 else 0
         width = scale_face_value(width)
         height = scale_face_value(height)
         x = scale_face_value(x)
         y = scale_face_value(y)
-        box = part_box(width, height, x, y)
         radius = min(width, height) // 2
+        if angle:
+            # 斜嘴角：先画到临时层再旋转，避免 PIL 没有旋转矩形。
+            pad = 10
+            tile = Image.new("RGBA", (width + pad * 2, height + pad * 2), (0, 0, 0, 0))
+            ImageDraw.Draw(tile).rounded_rectangle(
+                (pad, pad, pad + width, pad + height), radius=radius, fill=(*color, alpha))
+            tile = tile.rotate(angle, resample=Image.BICUBIC, expand=False)
+            origin = (CENTER + x - width // 2 - pad, CENTER + y - height // 2 - pad)
+            core.alpha_composite(tile, origin)
+            glow.alpha_composite(tile, origin)
+            continue
+        box = part_box(width, height, x, y)
         glow_draw.rounded_rectangle(box, radius=radius, fill=(*color, min(105, alpha)))
         core_draw.rounded_rectangle(box, radius=radius, fill=(*color, alpha))
     if specials:
@@ -69,6 +81,41 @@ def arc_box(x: int, y: int, diameter: int) -> tuple[float, float, float, float]:
     return (cx - half, cy - half, cx + half, cy + half)
 
 
+def _quad_points(x: float, chord_y: float, width: float, height: float, steps: int = 24):
+    """与样例 SVG 完全同构的二次贝塞尔：控制点上移 2×高度，顶点正好落在 chord_y - height。"""
+    half = width / 2
+    points = []
+    for index in range(steps + 1):
+        t = index / steps
+        px = (1 - t) ** 2 * (x - half) + 2 * (1 - t) * t * x + t ** 2 * (x + half)
+        py = (1 - t) ** 2 * chord_y + 2 * (1 - t) * t * (chord_y - 2 * height) + t ** 2 * chord_y
+        points.append((px, py))
+    return points
+
+
+HEART_PATH = (
+    ((0, 5.5), (-1.6, 2.4), (-8, 0.2), (-8, -3.4)),
+    ((-8, -3.4), (-8, -6.8), (-4.2, -8.2), (-1.6, -6.2)),
+    ((-1.6, -6.2), (-0.7, -5.5), (-0.2, -4.6), (0, -3.8)),
+    ((0, -3.8), (0.2, -4.6), (0.7, -5.5), (1.6, -6.2)),
+    ((1.6, -6.2), (4.2, -8.2), (8, -6.8), (8, -3.4)),
+    ((8, -3.4), (8, 0.2), (1.6, 2.4), (0, 5.5)),
+)
+
+
+def heart_polygon(center_x: float, center_y: float, scale: float) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    # 路径自身的纵向中心在 -1.35，平移掉它，让传入的 y 就是心形几何中心。
+    for (p0, c1, c2, p3) in HEART_PATH:
+        for index in range(1, 15):
+            t = index / 14
+            u = 1 - t
+            x = (u ** 3) * p0[0] + 3 * (u ** 2) * t * c1[0] + 3 * u * (t ** 2) * c2[0] + (t ** 3) * p3[0]
+            y = (u ** 3) * p0[1] + 3 * (u ** 2) * t * c1[1] + 3 * u * (t ** 2) * c2[1] + (t ** 3) * p3[1]
+            points.append((center_x + x * scale, center_y + (y + 1.35) * scale))
+    return points
+
+
 def draw_specials(
     glow_draw: ImageDraw.ImageDraw,
     core_draw: ImageDraw.ImageDraw,
@@ -82,32 +129,28 @@ def draw_specials(
             box = arc_box(x, y, diameter)
             glow_draw.arc(box, start, end, fill=(*color, 105), width=width + 4)
             core_draw.arc(box, start, end, fill=(*color, 255), width=width)
-            # PIL 的 arc 是方头，固件用 rounded 端点；这里补两个圆帽对齐观感。
-            radius = (box[2] - box[0]) / 2
-            center_x = (box[0] + box[2]) / 2
-            center_y = (box[1] + box[3]) / 2
-            cap = width / 2
-            for angle in (start, end):
-                radians = math.radians(angle)
-                px = center_x + radius * math.cos(radians)
-                py = center_y + radius * math.sin(radians)
+        elif kind == "quad":
+            _, x, chord_y, width, height, thickness, color = item
+            points = _quad_points(
+                CENTER + scale_face_value(x),
+                CENTER + scale_face_value(chord_y),
+                scale_face_value(width),
+                scale_face_value(height),
+            )
+            line_width = max(1, scale_face_value(thickness))
+            glow_draw.line(points, fill=(*color, 105), width=line_width + 4, joint="curve")
+            core_draw.line(points, fill=(*color, 255), width=line_width, joint="curve")
+            cap = line_width / 2
+            for (px, py) in (points[0], points[-1]):
                 glow_draw.ellipse((px - cap, py - cap, px + cap, py + cap), fill=(*color, 105))
                 core_draw.ellipse((px - cap, py - cap, px + cap, py + cap), fill=(*color, 255))
         elif kind == "heart":
-            _, x, y, size, color = item
-            cx = CENTER + scale_face_value(x)
-            cy = CENTER + scale_face_value(y)
-            radius = scale_face_value(18)
-            offset = scale_face_value(13)
-            half = scale_face_value(25)
-            for sign in (-1, 1):
-                lx = cx + sign * offset - radius
-                ly = cy - offset - radius
-                glow_draw.ellipse((lx, ly, lx + radius * 2, ly + radius * 2), fill=(*color, 105))
-                core_draw.ellipse((lx, ly, lx + radius * 2, ly + radius * 2), fill=(*color, 255))
-            diamond = [(cx, cy - half), (cx + half, cy), (cx, cy + half), (cx - half, cy)]
-            glow_draw.polygon(diamond, fill=(*color, 105))
-            core_draw.polygon(diamond, fill=(*color, 255))
+            _, x, y, width, color = item
+            center_x = CENTER + scale_face_value(x)
+            center_y = CENTER + scale_face_value(y)
+            polygon = heart_polygon(center_x, center_y, scale_face_value(width) / 16.0)
+            glow_draw.polygon(polygon, fill=(*color, 105))
+            core_draw.polygon(polygon, fill=(*color, 255))
         elif kind == "semi":
             _, x, y, width, height, color = item
             # y 是平顶位置，向下取半椭圆；box 上沿要上移一个 height，
@@ -179,17 +222,17 @@ def frame_parts(expression: str, phase: int) -> list[tuple[int, int, int, int, t
                 (72, 12, 0, 80 + wave // 2, CORAL),
                 (10 + wave, 10 + wave, 0, 52, CORAL)]
     if expression == "heart_eyes":
-        mouth = 22 + wave
+        mouth = 24 + wave // 2
         return [(mouth, mouth, 0, 63, AMBER),
                 (12, 12, -136, -102 + wave, CORAL),
                 (12, 12, 136, -102 + wave, CYAN)]
     if expression == "cheeky":
         scan = wave * 4
-        return [(58, 12, -65, -29, WARM),
-                (40, 64, 57 + scan // 4, -17, WARM),
-                (40, 13, 19, 53, AMBER),
-                (18, 18, 39, 63, CORAL),
-                (11, 11, 92, -85, CYAN)]
+        return [(58, 10, -65, -29, WARM),
+                (39, 63, 65 + scan // 4, -34, WARM),
+                (39, 12, 19, 53, AMBER, 255, -12),
+                (17, 17, 39, 63, CORAL),
+                (12, 12, 92, -85, CYAN)]
     if expression == "smile":
         return [(39, 24, -102, 29, CORAL, 120),
                 (39, 24, 102, 29, CORAL, 120)]
@@ -201,21 +244,21 @@ def frame_parts(expression: str, phase: int) -> list[tuple[int, int, int, int, t
 
 
 def frame_specials(expression: str, phase: int) -> list[tuple]:
-    """弧线与心形没有矩形图元可表达，单独走 PIL 的 arc / polygon。"""
+    """弧线与心形没有矩形图元可表达，单独按样例 SVG 的曲线参数绘制。"""
     wave = phase if phase < 4 else 8 - phase
     if expression == "heart_eyes":
-        return [("heart", -65, -29 + wave - 2, 64, CORAL),
-                ("heart", 65, -29 + wave - 2, 64, CORAL)]
+        return [("heart", -65, -29 + wave - 2, 66, CORAL),
+                ("heart", 65, -29 + wave - 2, 66, CORAL)]
     if expression == "smile":
-        return [("arc", -65, -29 + wave // 2, 68, 12, WARM, 225, 315),
-                ("arc", 65, -29 + wave // 2, 68, 12, WARM, 225, 315),
-                ("arc", 0, 52, 72, 12, AMBER, 30, 150)]
+        return [("quad", -65, -22 + wave // 3, 44, 13, 12, WARM),
+                ("quad", 65, -22 + wave // 3, 44, 13, 12, WARM),
+                ("quad", 0, 44, 68, 19, 12, AMBER)]
     if expression == "laugh":
-        visible = 42 + wave * 3
-        return [("arc", -65, -29, 68, 12, WARM, 225, 315),
-                ("arc", 65, -29, 68, 12, WARM, 225, 315),
-                ("semi", 0, 30, 104, visible, AMBER),
-                ("ellipse", 0, 30 + visible * 68 // 100, 34, 22, CORAL)]
+        visible = 48 + wave // 2
+        return [("quad", -65, -22, 44, 13, 12, WARM),
+                ("quad", 65, -22, 44, 13, 12, WARM),
+                ("semi", 0, 29, 107, visible, AMBER),
+                ("ellipse", 0, 29 + visible * 60 // 100, 39, 24, CORAL)]
     return []
 
 

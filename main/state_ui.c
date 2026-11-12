@@ -1877,10 +1877,10 @@ static void set_dotii_arc(lv_obj_t *arc, int diameter, int x, int y, int thickne
 static void set_dotii_heart(int index, int center_x, int center_y, int bob, uint32_t heart_color)
 {
     set_dotii_part(s_dotii_heart_lobe[index * 2], 36, 36,
-                   center_x - 13, center_y - 13 + bob, heart_color, LV_OPA_COVER);
+                   center_x - 14, center_y - 13 + bob, heart_color, LV_OPA_COVER);
     set_dotii_part(s_dotii_heart_lobe[index * 2 + 1], 36, 36,
-                   center_x + 13, center_y - 13 + bob, heart_color, LV_OPA_COVER);
-    set_dotii_part(s_dotii_heart_body[index], 36, 36,
+                   center_x + 14, center_y - 13 + bob, heart_color, LV_OPA_COVER);
+    set_dotii_part(s_dotii_heart_body[index], 38, 38,
                    center_x, center_y + bob, heart_color, LV_OPA_COVER);
 }
 
@@ -1925,6 +1925,8 @@ static void render_dotii_expression(void)
     lv_obj_add_flag(s_dotii_accent_right, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_accent_center, LV_OBJ_FLAG_HIDDEN);
     hide_dotii_cute_parts();
+    /* 只有"调皮"的嘴角是斜的，其余表情共用同一张嘴，每帧先复位旋转。 */
+    lv_obj_set_style_transform_rotation(s_dotii_mouth, 0, 0);
     set_dotii_part(s_dotii_left_eye, 52, 72, -78, -30, warm, LV_OPA_COVER);
     set_dotii_part(s_dotii_right_eye, 52, 72, 78, -30, warm, LV_OPA_COVER);
     set_dotii_part(s_dotii_mouth, 56, 12, 0, 70, warm, LV_OPA_COVER);
@@ -2012,7 +2014,7 @@ static void render_dotii_expression(void)
     case DOTII_EXPRESSION_HEART_EYES: {
         /* 两颗心随相位上下轻跳，嘴是小圆点（呼吸式放大）。 */
         const int bob = phase < 4 ? (int)phase : (int)(8 - phase);
-        const int mouth = 22 + bob;
+        const int mouth = 24 + bob / 2;
         set_dotii_heart(0, -65, -29, bob - 2, coral);
         set_dotii_heart(1, 65, -29, bob - 2, coral);
         set_dotii_part(s_dotii_mouth, mouth, mouth, 0, 63, amber, LV_OPA_COVER);
@@ -2023,40 +2025,42 @@ static void render_dotii_expression(void)
     case DOTII_EXPRESSION_CHEEKY: {
         /* 左眼眯成一条线，右眼左右扫视，嘴角上扬并吐一点舌头。 */
         const int scan = (phase < 4 ? (int)phase : (int)(8 - phase)) * 4;
-        set_dotii_part(s_dotii_left_eye, 58, 12, -65, -29, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 40, 64, 57 + scan / 4, -17, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 40, 13, 19, 53, amber, LV_OPA_COVER);
-        set_dotii_part(s_dotii_tongue, 18, 18, 39, 63, coral, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_right, 11, 11, 92, -85, cyan, LV_OPA_COVER);
+        set_dotii_part(s_dotii_left_eye, 58, 10, -65, -29, warm, LV_OPA_COVER);
+        set_dotii_part(s_dotii_right_eye, 39, 63, 65 + scan / 4, -34, warm, LV_OPA_COVER);
+        lv_obj_set_style_transform_rotation(s_dotii_mouth, -120, 0);
+        set_dotii_part(s_dotii_mouth, 39, 12, 19, 53, amber, LV_OPA_COVER);
+        set_dotii_part(s_dotii_tongue, 17, 17, 39, 63, coral, LV_OPA_COVER);
+        set_dotii_part(s_dotii_accent_right, 12, 12, 92, -85, cyan, LV_OPA_COVER);
         break;
     }
     case DOTII_EXPRESSION_SMILE: {
-        /* ∩ 形眼 + ∪ 形嘴 + 呼吸腮红。 */
+        /* 弧线参数按样例 SVG 的二次贝塞尔换算：
+           眼 44×13、嘴 68×19，直径/角度使弧高与弦宽一致。 */
         const int lift = phase < 4 ? (int)phase : (int)(8 - phase);
         set_dotii_part(s_dotii_blush_left, 39, 24, -102, 29, coral, (lv_opa_t)120);
         set_dotii_part(s_dotii_blush_right, 39, 24, 102, 29, coral, (lv_opa_t)120);
-        set_dotii_arc(s_dotii_eye_arc[0], 68, -65, -29 + lift / 2, 12, warm, 225, 315);
-        set_dotii_arc(s_dotii_eye_arc[1], 68, 65, -29 + lift / 2, 12, warm, 225, 315);
-        set_dotii_arc(s_dotii_smile_mouth, 72, 0, 52, 12, amber, 30, 150);
+        set_dotii_arc(s_dotii_eye_arc[0], 50, -65, -10 + lift / 3, 12, warm, 209, 331);
+        set_dotii_arc(s_dotii_eye_arc[1], 50, 65, -10 + lift / 3, 12, warm, 209, 331);
+        set_dotii_arc(s_dotii_smile_mouth, 80, 0, 65, 12, amber, 211, 329);
         break;
     }
     case DOTII_EXPRESSION_LAUGH: {
         /* 张口大笑：一个琥珀圆被顶部遮罩切出平顶，开口高度随相位抖动，
            舌头贴在嘴底。遮罩用纯黑，与表情页背景一致，肉眼不可见。 */
         const int open = phase < 4 ? (int)phase : (int)(8 - phase);
-        const int laugh_width = 104;
-        const int visible = 42 + open * 3;
-        const int flat_top = 30;
+        const int laugh_width = 107;
+        const int visible = 48 + open / 2;
+        const int flat_top = 29;
         const int mask_height = visible + 4;
         set_dotii_part(s_dotii_blush_left, 39, 24, -112, -10, coral, (lv_opa_t)110);
         set_dotii_part(s_dotii_blush_right, 39, 24, 112, -10, coral, (lv_opa_t)110);
-        set_dotii_arc(s_dotii_eye_arc[0], 68, -65, -29, 12, warm, 225, 315);
-        set_dotii_arc(s_dotii_eye_arc[1], 68, 65, -29, 12, warm, 225, 315);
+        set_dotii_arc(s_dotii_eye_arc[0], 50, -65, -10, 12, warm, 209, 331);
+        set_dotii_arc(s_dotii_eye_arc[1], 50, 65, -10, 12, warm, 209, 331);
         set_dotii_part(s_dotii_laugh_mouth, laugh_width, visible * 2, 0,
                        flat_top + visible, amber, LV_OPA_COVER);
         set_dotii_part(s_dotii_laugh_mask, laugh_width + 28, mask_height, 0,
                        flat_top + (visible - 4) / 2, COLOR_BG, LV_OPA_COVER);
-        set_dotii_part(s_dotii_tongue, 34, 22, 0, flat_top + (visible * 68) / 100,
+        set_dotii_part(s_dotii_tongue, 39, 24, 0, flat_top + (visible * 60) / 100,
                        coral, LV_OPA_COVER);
         set_dotii_part(s_dotii_accent_right, 12, 12, 136, -100, cyan, LV_OPA_COVER);
         break;

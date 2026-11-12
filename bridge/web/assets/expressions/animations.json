@@ -257,8 +257,8 @@
         100
       ],
       "loop": true,
-      "bytes": 24074,
-      "sha256": "26f1305a9d6edc144cf10606d27a711790766e998fcdad989ae6c346d5abe790"
+      "bytes": 23682,
+      "sha256": "ea73402f11e4cf49993a0a18b31d0b9ab9285195f9aabd0b08fbc0d9260618b9"
     },
     {
       "id": "cheeky",
@@ -282,8 +282,8 @@
         100
       ],
       "loop": true,
-      "bytes": 8958,
-      "sha256": "984a37dcae2f9371d906e2feae71688078dd38a560ad742ff4ff62e244daaf87"
+      "bytes": 11176,
+      "sha256": "a92c0020fda4f9f342cab7dfa4c70acf2a37a2bdf1e58181090adc32af86b3d0"
     },
     {
       "id": "smile",
@@ -307,8 +307,8 @@
         100
       ],
       "loop": true,
-      "bytes": 12900,
-      "sha256": "1a7ea8588f5b4759da98b9d2cb0b49ce02302938b61be2ecab193f53ecd85c94"
+      "bytes": 10722,
+      "sha256": "2e8dfb0e2331062d527013da1743c18f6850f141a7750ee9ef97a0f2eddcb778"
     },
     {
       "id": "laugh",
@@ -332,8 +332,8 @@
         100
       ],
       "loop": true,
-      "bytes": 16736,
-      "sha256": "200571cf03d076741ccddb588d75706ca3df508ecc8fb7383608ef26fcd61127"
+      "bytes": 13322,
+      "sha256": "cc0fe52e45648afecbaff6399c5ae443fff21c497fd7cff7231e3c67ae866518"
     }
   ],
   "style": "photo_geometric_v2"
