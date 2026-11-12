@@ -77,11 +77,13 @@ bool connectivity_usb_active(void)
 static uint8_t *s_custom_image_buffers[2];
 static uint32_t s_custom_image_revisions[2];
 static int s_custom_image_active = -1;
-/* 自定义页 GIF：单缓冲，PSRAM 存放原始 GIF 字节，播放交给 LVGL 的 lv_gif。 */
+/* 自定义页 GIF：双槽缓冲，PSRAM 存放原始 GIF 字节，播放交给 LVGL 的 lv_gif。
+   用两槽是为了「写新文件时不覆盖正在播放的那份」——lv_gif 会持续引用源缓冲。 */
 #define CUSTOM_ANIMATION_MAX_BYTES (4 * 1024 * 1024)
-static uint8_t *s_custom_animation_buffer;
-static uint32_t s_custom_animation_size;
-static uint32_t s_custom_animation_revision;
+static uint8_t *s_custom_animation_buffers[2];
+static uint32_t s_custom_animation_sizes[2];
+static uint32_t s_custom_animation_revisions[2];
+static int s_custom_animation_active = -1;
 static uint8_t *s_bambu_camera_buffers[2];
 static uint32_t s_bambu_camera_revisions[2];
 static int s_bambu_camera_active = -1;
@@ -917,9 +919,13 @@ static bool fetch_custom_image(uint32_t revision)
 static bool fetch_custom_animation(uint32_t revision, uint32_t size)
 {
     if (revision == 0 || size < 8 || size > CUSTOM_ANIMATION_MAX_BYTES) return false;
-    if (s_custom_animation_buffer != NULL && s_custom_animation_revision == revision &&
-        s_custom_animation_size == size) {
-        return true;
+    for (size_t index = 0; index < 2; index++) {
+        if (s_custom_animation_buffers[index] != NULL &&
+            s_custom_animation_revisions[index] == revision &&
+            s_custom_animation_sizes[index] == size) {
+            s_custom_animation_active = (int)index;
+            return true;
+        }
     }
     const device_config_values_t *device_config = device_config_get();
     char url[256];
@@ -928,15 +934,18 @@ static bool fetch_custom_animation(uint32_t revision, uint32_t size)
     if (last_slash == NULL) return false;
     strlcpy(last_slash + 1, "custom-animation.gif", sizeof(url) - (size_t)(last_slash + 1 - url));
 
-    if (s_custom_animation_buffer == NULL || s_custom_animation_size < size) {
-        uint8_t *buffer = heap_caps_realloc(s_custom_animation_buffer, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const int slot = s_custom_animation_active == 0 ? 1 : 0;
+    if (s_custom_animation_buffers[slot] == NULL ||
+        heap_caps_get_allocated_size(s_custom_animation_buffers[slot]) < size) {
+        uint8_t *buffer = heap_caps_realloc(s_custom_animation_buffers[slot], size,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (buffer == NULL) {
             ESP_LOGE(TAG, "Unable to allocate custom animation buffer");
             return false;
         }
-        s_custom_animation_buffer = buffer;
+        s_custom_animation_buffers[slot] = buffer;
     }
-    image_body_t response = {.data = s_custom_animation_buffer, .capacity = size};
+    image_body_t response = {.data = s_custom_animation_buffers[slot], .capacity = size};
     esp_http_client_config_t config = {
         .url = url,
         .event_handler = image_http_event_handler,
@@ -958,8 +967,9 @@ static bool fetch_custom_animation(uint32_t revision, uint32_t size)
                  esp_err_to_name(error), status, (unsigned)response.length);
         return false;
     }
-    s_custom_animation_size = size;
-    s_custom_animation_revision = revision;
+    s_custom_animation_sizes[slot] = size;
+    s_custom_animation_revisions[slot] = revision;
+    s_custom_animation_active = slot;
     ESP_LOGI(TAG, "Custom animation received: %u bytes, revision %lu",
              (unsigned)size, (unsigned long)revision);
     return true;
@@ -1084,11 +1094,15 @@ const uint8_t *connectivity_custom_image_data(uint32_t revision)
 
 const uint8_t *connectivity_custom_animation_data(uint32_t revision, size_t *size)
 {
-    if (revision == 0 || s_custom_animation_buffer == NULL || s_custom_animation_revision != revision) {
-        return NULL;
+    if (revision == 0) return NULL;
+    for (size_t index = 0; index < 2; index++) {
+        if (s_custom_animation_buffers[index] != NULL &&
+            s_custom_animation_revisions[index] == revision) {
+            if (size != NULL) *size = s_custom_animation_sizes[index];
+            return s_custom_animation_buffers[index];
+        }
     }
-    if (size != NULL) *size = s_custom_animation_size;
-    return s_custom_animation_buffer;
+    return NULL;
 }
 
 const uint8_t *connectivity_bambu_camera_data(uint32_t revision)
@@ -1182,13 +1196,12 @@ static void apply_connection_options(cJSON *root)
 }
 
 /* GIF 动画没有固定字节数，单独走一条变长通道：
-   第一片带 total 分配缓冲，最后一片校验 CRC 后整体换入。 */
-static uint8_t *s_anim_staging;
-static uint32_t s_anim_staging_capacity;
+   第一片带 total，直接写进空闲槽；最后一片校验 CRC 后把该槽标记为活动。 */
 static uint32_t s_anim_offset;
 static uint32_t s_anim_total;
 static uint32_t s_anim_crc;
 static uint32_t s_anim_revision;
+static int s_anim_slot = 0;
 
 static bool receive_usb_animation(cJSON *root)
 {
@@ -1203,19 +1216,21 @@ static bool receive_usb_animation(cJSON *root)
     if (total < 8 || total > CUSTOM_ANIMATION_MAX_BYTES || offset >= total) return false;
 
     if (offset == 0) {
-        if (s_anim_staging_capacity < total) {
-            uint8_t *expanded = heap_caps_realloc(s_anim_staging, total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_anim_slot = s_custom_animation_active == 0 ? 1 : 0;
+        if (s_custom_animation_buffers[s_anim_slot] == NULL ||
+            heap_caps_get_allocated_size(s_custom_animation_buffers[s_anim_slot]) < total) {
+            uint8_t *expanded = heap_caps_realloc(s_custom_animation_buffers[s_anim_slot], total,
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (expanded == NULL) return false;
-            s_anim_staging = expanded;
-            s_anim_staging_capacity = total;
+            s_custom_animation_buffers[s_anim_slot] = expanded;
         }
         s_anim_offset = 0;
         s_anim_total = total;
         s_anim_revision = (uint32_t)revision_value->valuedouble;
         s_anim_crc = (uint32_t)crc_value->valuedouble;
     }
-    if (s_anim_staging == NULL || offset != s_anim_offset || total != s_anim_total ||
-        s_anim_revision != (uint32_t)revision_value->valuedouble ||
+    if (s_custom_animation_buffers[s_anim_slot] == NULL || offset != s_anim_offset ||
+        total != s_anim_total || s_anim_revision != (uint32_t)revision_value->valuedouble ||
         s_anim_crc != (uint32_t)crc_value->valuedouble) return false;
 
     const char *encoded = usb_string(root, "data");
@@ -1224,24 +1239,19 @@ static bool receive_usb_animation(cJSON *root)
     if (mbedtls_base64_decode(s_usb_decoded, sizeof(s_usb_decoded), &length,
                               (const unsigned char *)encoded, strlen(encoded)) != 0 ||
         !length || offset + length > total) return false;
-    memcpy(s_anim_staging + offset, s_usb_decoded, length);
+    memcpy(s_custom_animation_buffers[s_anim_slot] + offset, s_usb_decoded, length);
     s_anim_offset += length;
     if (s_anim_offset < total) return true;
 
-    if (esp_rom_crc32_le(0, s_anim_staging, total) != s_anim_crc) {
+    if (esp_rom_crc32_le(0, s_custom_animation_buffers[s_anim_slot], total) != s_anim_crc) {
         ESP_LOGW(TAG, "Custom animation CRC mismatch, dropped");
         return false;
     }
-    if (s_custom_animation_buffer == NULL || s_custom_animation_size < total) {
-        uint8_t *buffer = heap_caps_realloc(s_custom_animation_buffer, total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (buffer == NULL) return false;
-        s_custom_animation_buffer = buffer;
-    }
-    memcpy(s_custom_animation_buffer, s_anim_staging, total);
-    s_custom_animation_size = total;
-    s_custom_animation_revision = s_anim_revision;
+    s_custom_animation_sizes[s_anim_slot] = total;
+    s_custom_animation_revisions[s_anim_slot] = s_anim_revision;
+    s_custom_animation_active = s_anim_slot;
     ESP_LOGI(TAG, "Custom animation received: %u bytes, revision %lu",
-             (unsigned)total, (unsigned long)s_custom_animation_revision);
+             (unsigned)total, (unsigned long)s_anim_revision);
     return true;
 }
 
@@ -1378,7 +1388,9 @@ static void process_usb(cJSON *request)
     cJSON_AddNumberToObject(response, "reset_reason", esp_reset_reason());
     cJSON_AddNumberToObject(response, "free_internal", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(response, "custom_revision", s_custom_image_active >= 0 ? s_custom_image_revisions[s_custom_image_active] : 0);
-    cJSON_AddNumberToObject(response, "animation_revision", s_custom_animation_revision);
+    cJSON_AddNumberToObject(response, "animation_revision",
+                            s_custom_animation_active >= 0 ?
+                            s_custom_animation_revisions[s_custom_animation_active] : 0);
     cJSON_AddNumberToObject(response, "camera_revision", s_bambu_camera_active >= 0 ? s_bambu_camera_revisions[s_bambu_camera_active] : 0);
     usb_transport_send(response);
     cJSON_Delete(response);
