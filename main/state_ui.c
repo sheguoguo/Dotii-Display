@@ -44,6 +44,8 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 #define COLOR_WARNING 0xF2C66D
 #define COLOR_DANGER 0xFF766F
 #define PAGE_COUNT 4
+/* 非首页停留多久无操作后自动回表情页。 */
+#define IDLE_RETURN_HOME_MS 30000u
 #define TITLE_HEIGHT 30
 #define DISPLAY_ANGLE_DEFAULT_TENTHS 840
 #define DISPLAY_ANGLE_MIN_TENTHS 800
@@ -119,6 +121,10 @@ static lv_obj_t *s_battery_label;
 static lv_obj_t *s_settings_wifi;
 static lv_obj_t *s_settings_ip;
 static lv_obj_t *s_settings_bridge;
+/* 页面可见性：NVS 读写函数定义在页面注册表之前，因此这里先声明。 */
+static bool s_page_codex_visible = true;
+static bool s_page_reminder_visible = true;
+static bool s_page_custom_visible = true;
 static lv_obj_t *s_settings_reset_button;
 static lv_obj_t *s_settings_reset_detail;
 /* 久坐提醒设置页的屏幕与状态：必须在 return_from_current 之前声明。 */
@@ -214,10 +220,13 @@ static size_t s_page_scroll_pair_count;
 static bool screen_enabled(lv_obj_t *screen);
 static bool page_enabled(uint8_t page);
 static lv_obj_t *page_screen(uint8_t page);
+static int page_index_of_screen(lv_obj_t *screen);
 static lv_obj_t *first_enabled_screen(void);
 static lv_obj_t *enabled_return_screen(lv_obj_t *screen);
 static void render_codex_detail(void);
 static void render_dotii_expression(void);
+static void make_page_dots(lv_obj_t *parent, uint8_t active_page);
+static void update_page_dots(void);
 static lv_color_t color(uint32_t hex);
 static void set_screen_background(lv_obj_t *screen);
 static void screen_off(void);
@@ -462,11 +471,21 @@ static void add_activity_event(lv_obj_t *screen)
 
 static void return_from_current(void)
 {
-    if (s_current == s_detail) load_screen(enabled_return_screen(page_screen(1)), false);
-    else if (s_current == s_bambu_detail) load_screen(enabled_return_screen(s_bambu_main), false);
-    else if (s_current == s_settings) load_screen(first_enabled_screen(), false);
-    else if (s_current == s_reminder_setup) load_screen(first_enabled_screen(), false);
+    if (s_current == s_settings) load_screen(first_enabled_screen(), false);
     else if (s_current == s_power) load_screen(enabled_return_screen(s_before_power), false);
+}
+
+/* 在页面环内前/后翻一页，自动跳过被关闭的页面。 */
+static void page_step(int direction)
+{
+    int page = page_index_of_screen(s_current);
+    if (page < 0) return;
+    for (int step = 0; step < PAGE_COUNT; ++step) {
+        page = (page + direction + PAGE_COUNT) % PAGE_COUNT;
+        if (!page_enabled((uint8_t)page)) continue;
+        load_screen(page_screen((uint8_t)page), direction > 0);
+        return;
+    }
 }
 
 static void swipe_event(lv_event_t *event)
@@ -476,7 +495,20 @@ static void swipe_event(lv_event_t *event)
     lv_indev_t *input = lv_indev_active();
     if (input == NULL) return;
 
-    lv_dir_t direction = lv_indev_get_gesture_dir(input);
+    const lv_dir_t direction = lv_indev_get_gesture_dir(input);
+
+    /* 页面环内的页面：左右滑动就是翻页，被关闭的页面直接跳过。 */
+    if (page_index_of_screen(s_current) >= 0) {
+        if (direction == LV_DIR_LEFT) {
+            page_step(1);
+            return;
+        }
+        if (direction == LV_DIR_RIGHT) {
+            page_step(-1);
+            return;
+        }
+    }
+
     if (s_current == s_control && direction == LV_DIR_TOP) {
         load_screen_with_transition(enabled_return_screen(s_before_control), TRANSITION_CONTROL_UP);
     } else if (s_current != s_control && s_current != s_power &&
@@ -487,29 +519,6 @@ static void swipe_event(lv_event_t *event)
         /* One upward swipe advances one viewport step. */
     } else if (direction == LV_DIR_BOTTOM && page_scroll_current(false)) {
         /* One downward swipe returns one viewport step. */
-    } else if ((s_current == s_main || s_current == s_plus_main) && direction == LV_DIR_LEFT) {
-        s_detail_task_index = 0;
-        s_detail_thread_id[0] = '\0';
-        render_codex_detail();
-        load_screen(s_detail, true);
-    } else if (s_current == s_detail && direction == LV_DIR_LEFT) {
-        if (s_detail_task_index + 1 < s_detail_task_count) {
-            bsp_display_transform_set_next_sweep(BSP_DISPLAY_SWEEP_LEFT);
-            s_detail_task_index++;
-            s_detail_thread_id[0] = '\0';
-            render_codex_detail();
-        }
-    } else if (s_current == s_detail && direction == LV_DIR_RIGHT) {
-        if (s_detail_task_index > 0) {
-            bsp_display_transform_set_next_sweep(BSP_DISPLAY_SWEEP_RIGHT);
-            s_detail_task_index--;
-            s_detail_thread_id[0] = '\0';
-            render_codex_detail();
-        } else {
-            return_from_current();
-        }
-    } else if (s_current == s_bambu_main && direction == LV_DIR_LEFT) {
-        load_screen(s_bambu_detail, true);
     } else if (direction == LV_DIR_RIGHT) {
         return_from_current();
     }
@@ -520,6 +529,8 @@ static void quick_clicked(lv_event_t *event)
     lv_obj_t *target = (lv_obj_t *)lv_event_get_user_data(event);
     if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
         if (target == s_main) target = page_screen(1);
+        /* 目标页可能已在设置里被关闭，这时整块屏都不该出现。 */
+        if (!screen_enabled(target)) return;
         load_screen_with_transition(target, TRANSITION_CONTROL_UP);
     }
 }
@@ -712,13 +723,6 @@ static void reminder_pause_event(lv_event_t *event)
     reminder_toggle_pause();
 }
 
-static void reminder_setup_entry(lv_event_t *event)
-{
-    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-    reminder_render();
-    load_screen(s_reminder_setup, true);
-}
-
 static void dismiss_reminder(void)
 {
     if (!s_reminder_visible) return;
@@ -906,6 +910,8 @@ static void build_reminder_setup(void)
     lv_obj_center(stop_text);
     lv_obj_add_event_cb(stop, reminder_stop_event, LV_EVENT_CLICKED, NULL);
 
+    /* 该页现在是页面环里的一页，补上页点阵提示可左右切换。 */
+    make_page_dots(safe, 2);
     reminder_render();
 }
 
@@ -923,7 +929,7 @@ static lv_obj_t *screen_saver_target(void)
        switches: disabling a page should not silently change the selected
        ambient page. */
     if (s_screen_off_page == DISPLAY_SCREEN_OFF_PAGE_CUSTOM) {
-        return s_custom;
+        return s_page_custom_visible ? s_custom : NULL;
     }
     if (s_screen_off_page == DISPLAY_SCREEN_OFF_PAGE_DOTII) {
         return s_dotii;
@@ -1013,6 +1019,33 @@ static void load_persisted_settings(void)
         s_display_angle_tenths = angle;
     }
     nvs_get_u32(handle, "display_rev", &s_display_revision);
+    /* 页面可见性：缺省全开。表情页恒显示，没有对应键。 */
+    uint8_t page_visible = 1;
+    if (nvs_get_u8(handle, "pg_codex", &page_visible) == ESP_OK) {
+        s_page_codex_visible = page_visible != 0;
+    }
+    page_visible = 1;
+    if (nvs_get_u8(handle, "pg_remind", &page_visible) == ESP_OK) {
+        s_page_reminder_visible = page_visible != 0;
+    }
+    page_visible = 1;
+    if (nvs_get_u8(handle, "pg_custom", &page_visible) == ESP_OK) {
+        s_page_custom_visible = page_visible != 0;
+    }
+    nvs_close(handle);
+}
+
+/* 页面可见性单独存，避免和快照下发的显示设置互相覆盖。 */
+static void save_page_visibility(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open("display_ui", NVS_READWRITE, &handle) != ESP_OK) return;
+    esp_err_t codex_result = nvs_set_u8(handle, "pg_codex", s_page_codex_visible ? 1 : 0);
+    esp_err_t reminder_result = nvs_set_u8(handle, "pg_remind", s_page_reminder_visible ? 1 : 0);
+    esp_err_t custom_result = nvs_set_u8(handle, "pg_custom", s_page_custom_visible ? 1 : 0);
+    if (codex_result == ESP_OK && reminder_result == ESP_OK && custom_result == ESP_OK) {
+        nvs_commit(handle);
+    }
     nvs_close(handle);
 }
 
@@ -1215,18 +1248,23 @@ static void make_reset_metric(lv_obj_t *parent, int x)
     lv_obj_align(caption, LV_ALIGN_BOTTOM_MID, 0, 1);
 }
 
-/* 本固件定制版：移除 Bambu 打印机页面，页面顺序改为
- * 0 = Dotii 表情（首页）、1 = WorkBuddy 积分、2 = 自定义。
- * Bambu 相关代码保留编译但不再注册到页面循环中。 */
+/* 页面顺序（本定制版）：
+ * 0 = Dotii 表情（首页，恒显示，不可关闭）
+ * 1 = Codex 额度（单页，详情页不再显示）
+ * 2 = 久坐提醒（设置与倒计时）
+ * 3 = 自定义
+ * Bambu 代码保留编译但不再占页位。
+ * 可见性由设备本地设置控制（NVS "display_ui" 命名空间），
+ * 后台的模块开关只影响数据采集，不再决定页面出现与否。 */
+
 static bool page_enabled(uint8_t page)
 {
-    /* 表情页是首页，且是本定制版的主界面，永远可用：
-       它不依赖后台模块开关，否则一旦快照缺失/模块开关为 false，
-       首页就会被踢到 Codex 页，观感上像是"固件没刷成功"。 */
+    /* 表情页是首页，永远可用：不依赖任何开关，否则一旦配置缺失
+       首页就会被踢到别的页，观感上像是"固件没刷成功"。 */
     if (page == 0) return true;
-    if (!s_snapshot.valid) return false;
-    if (page == 1) return s_snapshot.codex_enabled;
-    if (page == 2) return s_snapshot.custom_enabled;
+    if (page == 1) return s_page_codex_visible;
+    if (page == 2) return s_page_reminder_visible;
+    if (page == 3) return s_page_custom_visible;
     return false;
 }
 
@@ -1234,8 +1272,19 @@ static lv_obj_t *page_screen(uint8_t page)
 {
     if (page == 0) return s_dotii;
     if (page == 1) return s_snapshot.codex_ui_dual_limit ? s_plus_main : s_main;
-    if (page == 2) return s_custom;
+    if (page == 2) return s_reminder_setup;
+    if (page == 3) return s_custom;
     return s_dotii;
+}
+
+/* 反查某块屏属于第几页；覆盖页返回 -1。 */
+static int page_index_of_screen(lv_obj_t *screen)
+{
+    if (screen == NULL) return -1;
+    for (uint8_t page = 0; page < PAGE_COUNT; ++page) {
+        if (page_screen(page) == screen) return page;
+    }
+    return -1;
 }
 
 static lv_obj_t *first_enabled_screen(void)
@@ -1249,9 +1298,12 @@ static lv_obj_t *first_enabled_screen(void)
 static bool screen_enabled(lv_obj_t *screen)
 {
     if (screen == s_reminder) return s_reminder_visible;
-    if (screen == s_dotii) return page_enabled(0);
-    if (screen == s_main || screen == s_plus_main || screen == s_detail) return page_enabled(1);
-    if (screen == s_custom) return page_enabled(2);
+    if (screen == s_dotii) return true;
+    if (screen == s_main || screen == s_plus_main) return page_enabled(1);
+    /* 任务详情页按需求不再显示，保留代码但永不参与导航。 */
+    if (screen == s_detail) return false;
+    if (screen == s_reminder_setup) return page_enabled(2);
+    if (screen == s_custom) return page_enabled(3);
     if (screen == s_bambu_main || screen == s_bambu_detail) return false;
     return true;
 }
@@ -1266,7 +1318,8 @@ static lv_obj_t *enabled_return_screen(lv_obj_t *screen)
 static void update_page_dots(void)
 {
     /* 页面顺序已改为 表情 / WorkBuddy / 自定义，高亮色跟随新顺序。 */
-    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_CYAN, COLOR_BLUE, COLOR_WARNING, COLOR_BAMBU};
+    /* 页点阵配色跟随页面：表情 / Codex / 久坐提醒 / 自定义。 */
+    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_CYAN, COLOR_BLUE, COLOR_WARNING, COLOR_GREEN};
     for (uint8_t row = 0; row < PAGE_COUNT; ++row) {
         int total_width = 0;
         uint8_t count = 0;
@@ -2530,15 +2583,55 @@ static lv_obj_t *make_setting_card(lv_obj_t *parent, const char *title, const ch
     return detail_label;
 }
 
-/* 可点击的设置卡片：复用 make_setting_card 的外观，返回详情标签供实时刷新。 */
-static lv_obj_t *make_setting_entry(lv_obj_t *parent, const char *title, const char *detail,
-                                    lv_event_cb_t callback)
+/* 页面可见性开关：写 NVS 后立即刷新页点阵；若关掉的正是当前页，退回首页。 */
+static void page_visibility_event(lv_event_t *event)
 {
-    lv_obj_t *detail_label = make_setting_card(parent, title, detail);
-    lv_obj_t *card = lv_obj_get_parent(detail_label);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(card, color(0x1F2927), LV_STATE_PRESSED);
-    lv_obj_add_event_cb(card, callback, LV_EVENT_CLICKED, NULL);
+    if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *toggle = lv_event_get_target_obj(event);
+    const int page = (int)(intptr_t)lv_event_get_user_data(event);
+    const bool visible = lv_obj_has_state(toggle, LV_STATE_CHECKED);
+    if (page == 1) s_page_codex_visible = visible;
+    else if (page == 2) s_page_reminder_visible = visible;
+    else if (page == 3) s_page_custom_visible = visible;
+    save_page_visibility();
+    update_page_dots();
+    if (!s_screen_saver_active && !s_reminder_visible && !screen_enabled(s_current)) {
+        load_screen(first_enabled_screen(), false);
+    }
+}
+
+/* 一行“名称 + 开关”，detail 非空时占两行（用于久坐提醒显示倒计时状态）。 */
+static lv_obj_t *make_page_toggle_row(lv_obj_t *parent, const char *title, const char *detail,
+                                      bool checked, int page)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, detail != NULL ? 86 : 64);
+    lv_obj_set_style_radius(row, 20, 0);
+    lv_obj_set_style_bg_color(row, color(COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_hor(row, 16, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title_label = make_label(row, title, &ui_font_detail_20, COLOR_TEXT);
+    if (detail != NULL) lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, 0, 12);
+    else lv_obj_align(title_label, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *detail_label = NULL;
+    if (detail != NULL) {
+        detail_label = make_label(row, detail, &ui_font_detail_20, COLOR_MUTED);
+        lv_label_set_long_mode(detail_label, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(detail_label, 208);
+        lv_obj_align(detail_label, LV_ALIGN_BOTTOM_LEFT, 0, -12);
+    }
+
+    lv_obj_t *toggle = lv_switch_create(row);
+    lv_obj_set_size(toggle, 62, 34);
+    lv_obj_align(toggle, LV_ALIGN_RIGHT_MID, 0, 0);
+    if (checked) lv_obj_add_state(toggle, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(toggle, page_visibility_event, LV_EVENT_VALUE_CHANGED,
+                        (void *)(intptr_t)page);
     return detail_label;
 }
 
@@ -2568,9 +2661,12 @@ static void build_settings(void)
     lv_obj_center(refresh_text);
     lv_obj_add_event_cb(refresh, refresh_clicked, LV_EVENT_CLICKED, NULL);
 
-    s_settings_reminder_detail = make_setting_entry(s_settings_list, ui_tr("久坐提醒"),
-                                                    ui_tr("已停止 · 60 分钟"),
-                                                    reminder_setup_entry);
+    make_setting_card(s_settings_list, ui_tr("页面显示 · 表情页"), ui_tr("首页，始终显示"));
+    make_page_toggle_row(s_settings_list, ui_tr("显示 Codex 页"), NULL, s_page_codex_visible, 1);
+    s_settings_reminder_detail = make_page_toggle_row(s_settings_list, ui_tr("显示久坐提醒页"),
+                                                      ui_tr("已停止 · 60 分钟"),
+                                                      s_page_reminder_visible, 2);
+    make_page_toggle_row(s_settings_list, ui_tr("显示自定义页"), NULL, s_page_custom_visible, 3);
     s_settings_wifi = make_setting_card(s_settings_list, ui_tr("网络"), ui_tr("未配置"));
     s_settings_ip = make_setting_card(s_settings_list, ui_tr("设备地址"), "IP --");
     s_settings_bridge = make_setting_card(s_settings_list, ui_tr("Codex 数据源"), ui_tr("未配置"));
@@ -2940,6 +3036,17 @@ static void ui_timer(lv_timer_t *timer)
     /* 久坐提醒展示期间冻结熄屏与自动深睡：提醒必须亮着直到用户确认，
        否则最深睡会直接把提醒吞掉。reminder_timer 会持续刷新 s_last_activity。 */
     if (s_reminder_visible) return;
+    /* 非表情页停留 30 秒无操作 → 自动回到表情首页。
+       刻意不改写 s_last_activity：熄屏与深睡仍按真实无操作时长推进，
+       否则每次回首页都会把休眠计时清零。 */
+    if (s_screen_on && !s_screen_saver_active && s_current != s_dotii &&
+        inactive_ms > IDLE_RETURN_HOME_MS) {
+        /* load_screen 会把 s_last_activity 刷新成当前时刻，这里回填，
+           保持"无操作时长"连续，熄屏/深睡不被推迟。 */
+        const uint32_t last_activity = s_last_activity;
+        load_screen(s_dotii, false);
+        s_last_activity = last_activity;
+    }
     if (s_screen_on && !s_screen_saver_active && active_screen_off_timeout > 0 &&
         inactive_ms > active_screen_off_timeout * 1000U) {
         if (!enter_screen_saver()) screen_off();
@@ -3017,19 +3124,17 @@ void state_ui_button_a_short(void)
         load_screen_with_transition(enabled_return_screen(s_before_control), TRANSITION_CONTROL_UP);
         return;
     }
-    if (s_current == s_settings || s_current == s_reminder_setup) {
+    if (s_current == s_settings) {
         load_screen(first_enabled_screen(), false);
         return;
     }
-    int current_page = s_current == s_dotii ? 0 :
-        (s_current == s_main || s_current == s_plus_main) ? 1 :
-        s_current == s_custom ? 2 : -1;
+    const int current_page = page_index_of_screen(s_current);
     if (current_page < 0) {
         load_screen(first_enabled_screen(), true);
         return;
     }
     for (uint8_t offset = 1; offset <= PAGE_COUNT; ++offset) {
-        uint8_t next = (current_page + offset) % PAGE_COUNT;
+        uint8_t next = (uint8_t)((current_page + offset) % PAGE_COUNT);
         if (page_enabled(next)) {
             load_screen(page_screen(next), true);
             return;
