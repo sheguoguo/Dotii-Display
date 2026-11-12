@@ -57,6 +57,15 @@ class CustomAnimationStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             store.write_animation(GIF_HEADER + b"\x00" * (CUSTOM_ANIMATION_MAX_BYTES + 1))
 
+    def test_source_upload_routes_gif_to_animation(self) -> None:
+        store = self.store()
+        body = GIF_HEADER + b"\x00" * 16
+
+        info = store.write_source(body, "image/gif")
+
+        self.assertTrue(info["animation_available"])
+        self.assertEqual(store.read_animation(), body)
+
     def test_clear_animation_removes_stored_gif(self) -> None:
         store = self.store()
         store.write_animation(GIF_HEADER + b"\x00" * 16)

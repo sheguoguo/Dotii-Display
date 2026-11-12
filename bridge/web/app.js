@@ -1552,10 +1552,22 @@ function closeCropDialog(restoreStatus = true) {
   }
 }
 
+function isGifFile(file) {
+  if (!file) return false;
+  if (file.type === "image/gif") return true;
+  return /\.gif$/i.test(file.name || "");
+}
+
 function openCropDialog(file) {
   if (!file) return;
+  /* GIF 不走裁切流程，直接走动画通道——裁切会把动画压成单帧。 */
+  if (isGifFile(file)) {
+    byId("custom-image-file").value = "";
+    uploadCustomAnimation(file);
+    return;
+  }
   if (!["image/png", "image/jpeg"].includes(file.type)) {
-    showToast(t("请选择 PNG 或 JPEG 图片"));
+    showToast(t("请选择 PNG、JPEG 图片或 GIF 动画"));
     byId("custom-image-file").value = "";
     return;
   }

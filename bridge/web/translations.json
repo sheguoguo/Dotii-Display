@@ -603,5 +603,7 @@
   "移除失败": "Remove failed",
   "移除失败，请重试。": "Remove failed. Try again.",
   "动画已移除，Dotii 会回到静态画面。": "Animation removed. Dotii falls back to the static image.",
-  "动画已移除": "Animation removed"
+  "动画已移除": "Animation removed",
+  "支持 PNG / JPEG / GIF": "PNG / JPEG / GIF supported",
+  "请选择 PNG、JPEG 图片或 GIF 动画": "Choose a PNG, JPEG image or GIF animation"
 }

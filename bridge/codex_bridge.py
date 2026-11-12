@@ -917,6 +917,10 @@ class CustomAssetStore:
                 os.unlink(temporary_name)
 
     def write_source(self, body: bytes, content_type: str) -> dict[str, Any]:
+        # GIF 走动画通道：同一入口收下，避免前端/脚本把 GIF 投到图片接口时报错。
+        if body.startswith((b"GIF87a", b"GIF89a")):
+            info = self.write_animation(body)
+            return {**self.source_info(), **info}
         if content_type == "image/png":
             if not body.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise ValueError("PNG 文件签名无效")
@@ -924,7 +928,7 @@ class CustomAssetStore:
             if len(body) < 4 or not body.startswith(b"\xff\xd8") or not body.endswith(b"\xff\xd9"):
                 raise ValueError("JPEG 文件签名无效")
         else:
-            raise ValueError("仅支持 PNG 或 JPEG 图片")
+            raise ValueError("仅支持 PNG、JPEG 图片或 GIF 动画")
         with self.lock:
             self._atomic_bytes(self.source_path, body)
             self._atomic_bytes(
