@@ -174,6 +174,7 @@ class UsbBridge:
                     ssid=reply.get("ssid", ""), device_language=reply.get("language"), device_mode=reply.get("mode"),
                     uptime=reply.get("uptime", 0), reset_reason=reply.get("reset_reason"), free_internal=reply.get("free_internal"),
                     custom_revision=reply.get("custom_revision", 0), camera_revision=reply.get("camera_revision", 0),
+                    animation_revision=reply.get("animation_revision", 0),
                     bambu_command_id=reply.get("bambu_command_id", 0), bambu_command_state=reply.get("bambu_command_state", 0))
         return snapshot
 
