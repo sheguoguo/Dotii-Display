@@ -13,3 +13,7 @@
 
 # Keep the vendored zlib header byte-identical to its locked checksum.
 /managed_components/espressif__zlib/zlib/zconf.h text eol=lf
+
+# Linux 启动脚本与 systemd 单元必须是 LF：CRLF 会让 shebang 报错、unit 无法解析。
+*.sh text eol=lf
+*.service.in text eol=lf
