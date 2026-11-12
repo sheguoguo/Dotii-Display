@@ -261,79 +261,76 @@
       "sha256": "ea73402f11e4cf49993a0a18b31d0b9ab9285195f9aabd0b08fbc0d9260618b9"
     },
     {
-      "id": "cheeky",
-      "label": "调皮",
-      "purpose": "等待操作、被点一下",
-      "src": "/assets/expressions/dotii-cheeky.webp",
-      "format": "animated_webp",
+      "id": "face_smile",
+      "label": "笑眼",
+      "purpose": "工作时的笑脸",
+      "src": "/assets/expressions/dotii-face-smile.webp",
+      "format": "static_webp",
       "canvas": [
         466,
         466
       ],
-      "frame_count": 8,
+      "frame_count": 1,
       "durations_ms": [
-        100,
-        100,
-        100,
-        100,
-        100,
-        100,
-        100,
-        100
+        0
       ],
-      "loop": true,
-      "bytes": 11176,
-      "sha256": "a92c0020fda4f9f342cab7dfa4c70acf2a37a2bdf1e58181090adc32af86b3d0"
+      "loop": false,
+      "bytes": 0,
+      "sha256": ""
     },
     {
-      "id": "smile",
-      "label": "微笑",
-      "purpose": "空闲待机基础脸",
-      "src": "/assets/expressions/dotii-smile.webp",
-      "format": "animated_webp",
+      "id": "face_wink",
+      "label": "眨眼",
+      "purpose": "等待操作",
+      "src": "/assets/expressions/dotii-face-wink.webp",
+      "format": "static_webp",
       "canvas": [
         466,
         466
       ],
-      "frame_count": 8,
+      "frame_count": 1,
       "durations_ms": [
-        100,
-        100,
-        100,
-        100,
-        100,
-        100,
-        100,
-        100
+        0
       ],
-      "loop": true,
-      "bytes": 10722,
-      "sha256": "2e8dfb0e2331062d527013da1743c18f6850f141a7750ee9ef97a0f2eddcb778"
+      "loop": false,
+      "bytes": 0,
+      "sha256": ""
     },
     {
-      "id": "laugh",
-      "label": "大笑",
-      "purpose": "工作中、打印中",
-      "src": "/assets/expressions/dotii-laugh.webp",
-      "format": "animated_webp",
+      "id": "face_cozy",
+      "label": "满足",
+      "purpose": "闭眼放松",
+      "src": "/assets/expressions/dotii-face-cozy.webp",
+      "format": "static_webp",
       "canvas": [
         466,
         466
       ],
-      "frame_count": 8,
+      "frame_count": 1,
       "durations_ms": [
-        100,
-        100,
-        100,
-        100,
-        100,
-        100,
-        100,
-        100
+        0
       ],
-      "loop": true,
-      "bytes": 13322,
-      "sha256": "cc0fe52e45648afecbaff6399c5ae443fff21c497fd7cff7231e3c67ae866518"
+      "loop": false,
+      "bytes": 0,
+      "sha256": ""
+    },
+    {
+      "id": "face_sparkle",
+      "label": "星星眼",
+      "purpose": "任务完成的兴奋",
+      "src": "/assets/expressions/dotii-face-sparkle.webp",
+      "format": "static_webp",
+      "canvas": [
+        466,
+        466
+      ],
+      "frame_count": 1,
+      "durations_ms": [
+        0
+      ],
+      "loop": false,
+      "bytes": 0,
+      "sha256": ""
     }
   ],
   "style": "photo_geometric_v2"

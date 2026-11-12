@@ -45,7 +45,7 @@ class CodexUiConfigTests(unittest.TestCase):
         )
         self.assertEqual(failed["expression"], "failure")
         self.assertEqual(working["state"], "bambu_printing")
-        self.assertEqual(working["expression"], "laugh")
+        self.assertEqual(working["expression"], "face_smile")
 
     def test_dotii_state_maps_waiting_and_offline(self) -> None:
         waiting = dotii_state(
@@ -54,7 +54,7 @@ class CodexUiConfigTests(unittest.TestCase):
         offline = dotii_state(
             {"codex": {"task": {"status": "offline"}}}, {}, True,
         )
-        self.assertEqual(waiting["expression"], "cheeky")
+        self.assertEqual(waiting["expression"], "face_wink")
         self.assertEqual(offline["expression"], "connecting")
 
     def test_dotii_state_uses_heart_eyes_for_completed_print(self) -> None:
@@ -67,18 +67,18 @@ class CodexUiConfigTests(unittest.TestCase):
 
     def test_dotii_config_allows_one_animation_to_cover_multiple_states(self) -> None:
         config = default_dotii_config()
-        config["animations"]["cheeky"]["states"].remove("codex_waiting_user")
-        config["animations"]["laugh"]["states"].append("codex_waiting_user")
-        config["animations"]["laugh"]["state_duration_ms"] = 3000
+        config["animations"]["face_wink"]["states"].remove("codex_waiting_user")
+        config["animations"]["face_smile"]["states"].append("codex_waiting_user")
+        config["animations"]["face_smile"]["state_duration_ms"] = 3000
         validated = validate_dotii_config(config)
         state = dotii_state(
             {"codex": {"task": {"status": "waiting_user"}}}, {}, True, validated,
         )
-        self.assertEqual(state["expression"], "laugh")
+        self.assertEqual(state["expression"], "face_smile")
         self.assertEqual(state["state_duration_ms"], 3000)
         self.assertFalse(state["state_hold"])
         self.assertEqual(
-            validated["animations"]["laugh"]["states"],
+            validated["animations"]["face_smile"]["states"],
             ["codex_working", "bambu_printing", "codex_waiting_user"],
         )
 
@@ -90,8 +90,8 @@ class CodexUiConfigTests(unittest.TestCase):
 
     def test_dotii_config_unassigned_business_states_keep_plain_status_reason(self) -> None:
         config = default_dotii_config()
-        config["animations"]["laugh"]["states"].remove("codex_working")
-        config["animations"]["laugh"]["states"].remove("bambu_printing")
+        config["animations"]["face_smile"]["states"].remove("codex_working")
+        config["animations"]["face_smile"]["states"].remove("bambu_printing")
 
         validated = validate_dotii_config(config)
         codex = dotii_state(
@@ -115,14 +115,14 @@ class CodexUiConfigTests(unittest.TestCase):
 
     def test_dotii_config_validates_animation_duration(self) -> None:
         config = default_dotii_config()
-        config["animations"]["laugh"]["state_duration_ms"] = 2400
+        config["animations"]["face_smile"]["state_duration_ms"] = 2400
         with self.assertRaises(ValueError):
             validate_dotii_config(config)
 
         for duration in (0, 1000, 3000, 5000, 30000):
-            config["animations"]["laugh"]["state_duration_ms"] = duration
+            config["animations"]["face_smile"]["state_duration_ms"] = duration
             self.assertEqual(
-                validate_dotii_config(config)["animations"]["laugh"]["state_duration_ms"],
+                validate_dotii_config(config)["animations"]["face_smile"]["state_duration_ms"],
                 duration,
             )
 
@@ -137,14 +137,14 @@ class CodexUiConfigTests(unittest.TestCase):
         }
         for animation in config["animations"].values():
             animation["states"] = [replacements.get(item, item) for item in animation["states"]]
-        config["animations"]["cheeky"]["states"].remove("bambu_paused")
-        config["animations"]["laugh"]["states"].remove("bambu_printing")
+        config["animations"]["face_wink"]["states"].remove("bambu_paused")
+        config["animations"]["face_smile"]["states"].remove("bambu_printing")
         config["animations"]["failure"]["states"].remove("bambu_failure")
 
         migrated = validate_dotii_config(config)
 
-        self.assertIn("codex_working", migrated["animations"]["laugh"]["states"])
-        self.assertIn("bambu_printing", migrated["animations"]["laugh"]["states"])
+        self.assertIn("codex_working", migrated["animations"]["face_smile"]["states"])
+        self.assertIn("bambu_printing", migrated["animations"]["face_smile"]["states"])
         self.assertIn("codex_failure", migrated["animations"]["failure"]["states"])
         self.assertIn("bambu_failure", migrated["animations"]["failure"]["states"])
 
@@ -169,20 +169,20 @@ class CodexUiConfigTests(unittest.TestCase):
         config["animations"]["idle_breath"]["states"].append("idle")
         config["animations"]["blink"]["states"].append("blink")
         config["animations"]["touch_response"]["states"].extend(["touch", "codex_working"])
-        config["animations"]["laugh"]["states"].remove("codex_working")
+        config["animations"]["face_smile"]["states"].remove("codex_working")
 
         migrated = validate_dotii_config(config)
 
         self.assertEqual(migrated["animations"]["idle_breath"]["states"], [])
         self.assertEqual(migrated["animations"]["touch_response"]["states"], [])
-        self.assertIn("codex_working", migrated["animations"]["laugh"]["states"])
-        self.assertEqual(migrated["animations"]["laugh"]["state_duration_ms"], 0)
+        self.assertIn("codex_working", migrated["animations"]["face_smile"]["states"])
+        self.assertEqual(migrated["animations"]["face_smile"]["state_duration_ms"], 0)
         self.assertEqual(len(migrated["fixed_states"]), 5)
         self.assertEqual([group["id"] for group in migrated["state_groups"]], ["codex", "bambu"])
 
     def test_dotii_state_distinguishes_codex_working_from_bambu_printing(self) -> None:
         config = default_dotii_config()
-        config["animations"]["laugh"]["states"].remove("bambu_printing")
+        config["animations"]["face_smile"]["states"].remove("bambu_printing")
         config["animations"]["heart_eyes"]["states"].append("bambu_printing")
 
         codex = dotii_state(
@@ -196,7 +196,7 @@ class CodexUiConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(codex["state"], "codex_working")
-        self.assertEqual(codex["expression"], "laugh")
+        self.assertEqual(codex["expression"], "face_smile")
         self.assertEqual(bambu["state"], "bambu_printing")
         self.assertEqual(bambu["expression"], "heart_eyes")
 
@@ -206,7 +206,7 @@ class CodexUiConfigTests(unittest.TestCase):
         self.assertEqual(state["local_states"]["touch"]["duration_ms"], 1200)
         self.assertEqual(state["local_states"]["blink"]["expression"], "blink")
         self.assertEqual(state["local_states"]["long_idle"]["expression"], "sleepy_yawn")
-        self.assertEqual(len(state["durations_ms"]), 13)
+        self.assertEqual(len(state["durations_ms"]), 14)
 
     def test_dotii_state_token_changes_only_with_logical_state(self) -> None:
         working = dotii_state(

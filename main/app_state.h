@@ -47,9 +47,11 @@ typedef enum {
     DOTII_EXPRESSION_FAILURE,
     /* 可爱系表情：新增在末尾，既有取值保持不变，老配置与老固件互不影响。 */
     DOTII_EXPRESSION_HEART_EYES,
-    DOTII_EXPRESSION_CHEEKY,
-    DOTII_EXPRESSION_SMILE,
-    DOTII_EXPRESSION_LAUGH,
+    /* 位图表情：直接显示烘焙好的 RGB565 画面（顺序对应 dotii_face_assets）。 */
+    DOTII_EXPRESSION_FACE_SMILE,
+    DOTII_EXPRESSION_FACE_WINK,
+    DOTII_EXPRESSION_FACE_COZY,
+    DOTII_EXPRESSION_FACE_SPARKLE,
     DOTII_EXPRESSION_COUNT,
 } dotii_expression_t;
 

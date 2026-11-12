@@ -171,7 +171,7 @@ class ModuleOnDemandTests(unittest.TestCase):
         manifest_path = BRIDGE / "web" / "assets" / "expressions" / "animations.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         animations = manifest["animations"]
-        self.assertEqual(len(animations), 13)
+        self.assertEqual(len(animations), 14)
         for animation in animations:
             asset = BRIDGE / "web" / animation["src"].lstrip("/")
             self.assertTrue(asset.is_file(), animation["id"])

@@ -21,6 +21,7 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 #include "ui_icons.h"
+#include "dotii_faces.h"
 
 LV_FONT_DECLARE(ui_font_chinese_semibold_24);
 LV_FONT_DECLARE(ui_font_bambu_semibold_24);
@@ -54,7 +55,7 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 /* 待机基础脸。原来固定为"呼吸"，现在换成更可爱的"微笑"：待机时在微笑与
    眨眼之间切换，超过 60 秒无操作仍进入打哈欠。要回退只需把这里改成
    DOTII_EXPRESSION_IDLE_BREATH，渲染分支都还在。 */
-#define DOTII_IDLE_BASE_EXPRESSION DOTII_EXPRESSION_SMILE
+#define DOTII_IDLE_BASE_EXPRESSION DOTII_EXPRESSION_FACE_SMILE
 
 static QueueHandle_t s_snapshot_queue;
 /* The UI reads this snapshot from task context; it is not a DMA buffer. */
@@ -148,15 +149,9 @@ static lv_obj_t *s_dotii_accent_right;
 static lv_obj_t *s_dotii_accent_center;
 /* 可爱系表情的新图元。心形眼 = 每眼 2 个圆 + 1 个旋转 45 度的方块；
    微笑/大笑 = 弧线嘴与"圆 + 黑色遮罩"切出来的张口；腮红与舌头各一件。 */
+static lv_obj_t *s_dotii_face;   /* 位图表情：一次创建，切换 src 即可 */
 static lv_obj_t *s_dotii_heart_lobe[4];
 static lv_obj_t *s_dotii_heart_body[2];
-static lv_obj_t *s_dotii_eye_arc[2];
-static lv_obj_t *s_dotii_smile_mouth;
-static lv_obj_t *s_dotii_laugh_mouth;
-static lv_obj_t *s_dotii_laugh_mask;
-static lv_obj_t *s_dotii_tongue;
-static lv_obj_t *s_dotii_blush_left;
-static lv_obj_t *s_dotii_blush_right;
 static lv_obj_t *s_codex_quick;
 static lv_obj_t *s_bambu_quick;
 static lv_obj_t *s_custom_quick;
@@ -2134,6 +2129,18 @@ static bool dotii_idle_fallback_active(void)
     return s_snapshot.dotii_base_idle || !dotii_business_animation_active();
 }
 
+/* 位图表情直接显示烘焙好的画面，不参与几何图元渲染。 */
+static int dotii_face_index(dotii_expression_t expression)
+{
+    switch (expression) {
+    case DOTII_EXPRESSION_FACE_SMILE: return DOTII_FACE_SMILE;
+    case DOTII_EXPRESSION_FACE_WINK: return DOTII_FACE_WINK;
+    case DOTII_EXPRESSION_FACE_COZY: return DOTII_FACE_COZY;
+    case DOTII_EXPRESSION_FACE_SPARKLE: return DOTII_FACE_SPARKLE;
+    default: return -1;
+    }
+}
+
 static dotii_expression_t active_dotii_expression(void)
 {
     if (dotii_touch_active()) {
@@ -2171,28 +2178,6 @@ static void set_dotii_part(lv_obj_t *part, int width, int height, int x, int y,
 /* 弧线图元（微笑/大笑的眼睛与嘴）：lv_arc 的角度以 3 点钟为 0 顺时针增长，
    因此"∩"形取 225..315，"∪"形取 30..150。尺寸与偏移走与 set_dotii_part
    相同的 1.2 倍放大，保证和矩形图元比例一致。 */
-static void set_dotii_arc(lv_obj_t *arc, int diameter, int x, int y, int thickness,
-                          uint32_t arc_color, int start_angle, int end_angle)
-{
-    if (arc == NULL) return;
-    const int scale_num = 6;
-    const int scale_den = 5;
-    diameter = (diameter * scale_num + scale_den / 2) / scale_den;
-    thickness = (thickness * scale_num + scale_den / 2) / scale_den;
-    x = x >= 0 ? (x * scale_num + scale_den / 2) / scale_den :
-                 -((-x * scale_num + scale_den / 2) / scale_den);
-    y = y >= 0 ? (y * scale_num + scale_den / 2) / scale_den :
-                 -((-y * scale_num + scale_den / 2) / scale_den);
-    lv_obj_remove_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_size(arc, diameter, diameter);
-    lv_obj_align(arc, LV_ALIGN_CENTER, x, y);
-    lv_obj_set_style_arc_width(arc, thickness, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, color(arc_color), LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_INDICATOR);
-    lv_arc_set_bg_angles(arc, start_angle, end_angle);
-}
-
 /* 心形 = 左右两个圆 + 一个旋转 45 度的方块。index 0 为左眼、1 为右眼。
    尺寸按"圆半径 = 方块边长的一半"这一标准比例配，圆的肩部正好压住方块的
    棱角，不留突起。 */
@@ -2211,14 +2196,7 @@ static void hide_dotii_cute_parts(void)
     for (int index = 0; index < 4; ++index) lv_obj_add_flag(s_dotii_heart_lobe[index], LV_OBJ_FLAG_HIDDEN);
     for (int index = 0; index < 2; ++index) {
         lv_obj_add_flag(s_dotii_heart_body[index], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_dotii_eye_arc[index], LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_add_flag(s_dotii_smile_mouth, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_laugh_mouth, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_laugh_mask, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_tongue, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_blush_left, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_blush_right, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void render_dotii_expression(void)
@@ -2243,12 +2221,28 @@ static void render_dotii_expression(void)
     const uint32_t duration = dotii_expression_duration(expression);
     const uint32_t phase = ((elapsed % duration) * 8U) / duration;
 
+    const int face_index = dotii_face_index(expression);
+    if (face_index >= 0 && s_dotii_face != NULL) {
+        /* 位图表情：藏掉所有几何图元，只显示图片。 */
+        lv_obj_add_flag(s_dotii_left_eye, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_dotii_right_eye, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_dotii_mouth, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_dotii_accent_left, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_dotii_accent_right, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_dotii_accent_center, LV_OBJ_FLAG_HIDDEN);
+        hide_dotii_cute_parts();
+        lv_image_set_src(s_dotii_face, dotii_face_assets[face_index].image);
+        lv_obj_align(s_dotii_face, LV_ALIGN_CENTER,
+                     dotii_face_assets[face_index].x, dotii_face_assets[face_index].y);
+        lv_obj_remove_flag(s_dotii_face, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (s_dotii_face != NULL) lv_obj_add_flag(s_dotii_face, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_add_flag(s_dotii_accent_left, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_accent_right, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_accent_center, LV_OBJ_FLAG_HIDDEN);
     hide_dotii_cute_parts();
-    /* 只有"调皮"的嘴角是斜的，其余表情共用同一张嘴，每帧先复位旋转。 */
-    lv_obj_set_style_transform_rotation(s_dotii_mouth, 0, 0);
     set_dotii_part(s_dotii_left_eye, 52, 72, -78, -30, warm, LV_OPA_COVER);
     set_dotii_part(s_dotii_right_eye, 52, 72, 78, -30, warm, LV_OPA_COVER);
     set_dotii_part(s_dotii_mouth, 56, 12, 0, 70, warm, LV_OPA_COVER);
@@ -2344,49 +2338,6 @@ static void render_dotii_expression(void)
         set_dotii_part(s_dotii_accent_right, 12, 12, 136, -102 + bob, cyan, LV_OPA_COVER);
         break;
     }
-    case DOTII_EXPRESSION_CHEEKY: {
-        /* 左眼眯成一条线，右眼左右扫视，嘴角上扬并吐一点舌头。 */
-        const int scan = (phase < 4 ? (int)phase : (int)(8 - phase)) * 4;
-        set_dotii_part(s_dotii_left_eye, 58, 10, -65, -29, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 39, 63, 65 + scan / 4, -34, warm, LV_OPA_COVER);
-        lv_obj_set_style_transform_rotation(s_dotii_mouth, -120, 0);
-        set_dotii_part(s_dotii_mouth, 39, 12, 19, 53, amber, LV_OPA_COVER);
-        set_dotii_part(s_dotii_tongue, 17, 17, 39, 63, coral, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_right, 12, 12, 92, -85, cyan, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_SMILE: {
-        /* 弧线参数按样例 SVG 的二次贝塞尔换算：
-           眼 44×13、嘴 68×19，直径/角度使弧高与弦宽一致。 */
-        const int lift = phase < 4 ? (int)phase : (int)(8 - phase);
-        set_dotii_part(s_dotii_blush_left, 39, 24, -102, 29, coral, (lv_opa_t)120);
-        set_dotii_part(s_dotii_blush_right, 39, 24, 102, 29, coral, (lv_opa_t)120);
-        set_dotii_arc(s_dotii_eye_arc[0], 50, -65, -10 + lift / 3, 12, warm, 209, 331);
-        set_dotii_arc(s_dotii_eye_arc[1], 50, 65, -10 + lift / 3, 12, warm, 209, 331);
-        set_dotii_arc(s_dotii_smile_mouth, 80, 0, 65, 12, amber, 211, 329);
-        break;
-    }
-    case DOTII_EXPRESSION_LAUGH: {
-        /* 张口大笑：一个琥珀圆被顶部遮罩切出平顶，开口高度随相位抖动，
-           舌头贴在嘴底。遮罩用纯黑，与表情页背景一致，肉眼不可见。 */
-        const int open = phase < 4 ? (int)phase : (int)(8 - phase);
-        const int laugh_width = 107;
-        const int visible = 48 + open / 2;
-        const int flat_top = 29;
-        const int mask_height = visible + 4;
-        set_dotii_part(s_dotii_blush_left, 39, 24, -112, -10, coral, (lv_opa_t)110);
-        set_dotii_part(s_dotii_blush_right, 39, 24, 112, -10, coral, (lv_opa_t)110);
-        set_dotii_arc(s_dotii_eye_arc[0], 50, -65, -10, 12, warm, 209, 331);
-        set_dotii_arc(s_dotii_eye_arc[1], 50, 65, -10, 12, warm, 209, 331);
-        set_dotii_part(s_dotii_laugh_mouth, laugh_width, visible * 2, 0,
-                       flat_top + visible, amber, LV_OPA_COVER);
-        set_dotii_part(s_dotii_laugh_mask, laugh_width + 28, mask_height, 0,
-                       flat_top + (visible - 4) / 2, COLOR_BG, LV_OPA_COVER);
-        set_dotii_part(s_dotii_tongue, 39, 24, 0, flat_top + (visible * 60) / 100,
-                       coral, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_right, 12, 12, 136, -100, cyan, LV_OPA_COVER);
-        break;
-    }
     default:
         break;
     }
@@ -2420,6 +2371,11 @@ static void build_dotii(void)
     lv_obj_add_event_cb(s_dotii, dotii_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
     lv_obj_add_flag(s_dotii, LV_OBJ_FLAG_CLICKABLE);
 
+    s_dotii_face = lv_image_create(s_dotii);
+    lv_obj_remove_flag(s_dotii_face, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_dotii_face, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_center(s_dotii_face);
+
     s_dotii_left_eye = make_dotii_part(s_dotii, 52, 72, -78, -30, 0xF4EAD2);
     s_dotii_right_eye = make_dotii_part(s_dotii, 52, 72, 78, -30, 0xF4EAD2);
     s_dotii_mouth = make_dotii_part(s_dotii, 56, 12, 0, 70, 0xF4EAD2);
@@ -2442,30 +2398,7 @@ static void build_dotii(void)
         lv_obj_remove_flag(heart_body, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_transform_rotation(heart_body, 450, 0);
         s_dotii_heart_body[index] = heart_body;
-
-        lv_obj_t *eye_arc = lv_arc_create(s_dotii);
-        lv_obj_remove_style(eye_arc, NULL, LV_PART_KNOB);
-        lv_obj_set_style_bg_opa(eye_arc, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_arc_rounded(eye_arc, true, LV_PART_MAIN);
-        lv_obj_remove_flag(eye_arc, LV_OBJ_FLAG_CLICKABLE);
-        s_dotii_eye_arc[index] = eye_arc;
     }
-    s_dotii_smile_mouth = lv_arc_create(s_dotii);
-    lv_obj_remove_style(s_dotii_smile_mouth, NULL, LV_PART_KNOB);
-    lv_obj_set_style_bg_opa(s_dotii_smile_mouth, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(s_dotii_smile_mouth, true, LV_PART_MAIN);
-    lv_obj_remove_flag(s_dotii_smile_mouth, LV_OBJ_FLAG_CLICKABLE);
-    s_dotii_laugh_mouth = make_dotii_part(s_dotii, 104, 84, 0, 84, COLOR_WARNING);
-    /* 遮罩必须建在嘴之后才能盖住上半部；纯黑与表情页背景同色，看不见。 */
-    s_dotii_laugh_mask = lv_obj_create(s_dotii);
-    lv_obj_remove_style_all(s_dotii_laugh_mask);
-    lv_obj_set_style_radius(s_dotii_laugh_mask, 0, 0);
-    lv_obj_set_style_bg_color(s_dotii_laugh_mask, color(COLOR_BG), 0);
-    lv_obj_set_style_bg_opa(s_dotii_laugh_mask, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(s_dotii_laugh_mask, LV_OBJ_FLAG_CLICKABLE);
-    s_dotii_tongue = make_dotii_part(s_dotii, 36, 24, 0, 0, 0xFF827A);
-    s_dotii_blush_left = make_dotii_part(s_dotii, 39, 24, 0, 0, 0xFF827A);
-    s_dotii_blush_right = make_dotii_part(s_dotii, 39, 24, 0, 0, 0xFF827A);
     /* 本定制版把表情页提升为首页：原设计作为沉浸页不显示导航点，但首页
        必须让用户看见还有其他页面可切，因此恢复导航点。 */
     make_page_dots(s_dotii, 0);

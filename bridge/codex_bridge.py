@@ -99,7 +99,7 @@ def resolve_ffmpeg(runtime_folder: Path) -> str | None:
 DOTII_EXPRESSION_IDS = (
     "idle_breath", "blink", "curious", "sleepy_yawn",
     "touch_response", "connecting", "working", "complete", "failure",
-    "heart_eyes", "cheeky", "smile", "laugh",
+    "heart_eyes", "face_smile", "face_wink", "face_cozy", "face_sparkle",
 )
 DOTII_EXPRESSIONS = set(DOTII_EXPRESSION_IDS)
 DOTII_LEGACY_EXPRESSIONS = {"happy"}
@@ -108,7 +108,7 @@ DOTII_FIXED_EXPRESSION_IDS = (
 )
 DOTII_BUSINESS_EXPRESSION_IDS = (
     "curious", "working", "complete", "failure",
-    "heart_eyes", "cheeky", "smile", "laugh",
+    "heart_eyes", "face_smile", "face_wink", "face_cozy", "face_sparkle",
 )
 DOTII_STATE_GROUPS = (
     {"id": "codex", "label": "Codex 状态"},
@@ -148,8 +148,8 @@ DOTII_LEGACY_STATE_EXPANSIONS = {
 }
 DOTII_DEFAULT_BUSINESS_ASSIGNMENTS = {
     "heart_eyes": ("codex_completed", "bambu_completed"),
-    "laugh": ("codex_working", "bambu_printing"),
-    "cheeky": ("codex_waiting_user", "bambu_paused"),
+    "face_smile": ("codex_working", "bambu_printing"),
+    "face_wink": ("codex_waiting_user", "bambu_paused"),
     "failure": ("codex_failure", "bambu_failure"),
 }
 DOTII_DEFAULT_BUSINESS_EXPRESSION = {
@@ -486,7 +486,7 @@ def validate_dotii_config(payload: Any) -> dict[str, Any]:
     if not isinstance(animations, dict):
         raise ValueError("dotii.animations must be an object")
 
-    # 老配置文件里没有新增的可爱表情（heart_eyes/cheeky/smile/laugh）。
+    # 老配置文件里没有新增的可爱表情（heart_eyes / face_*）。
     # 只补空槽位、不自动占用状态，避免旧用户因缺键直接 500。
     animations = dict(animations)
     for expression_id in DOTII_EXPRESSION_IDS:

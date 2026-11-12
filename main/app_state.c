@@ -129,7 +129,7 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->charging_sleep_timeout_seconds = 300;
     snapshot->five_hour_remaining_percent = 68;
     snapshot->bambu_status = BAMBU_STATUS_PRINTING;
-    snapshot->dotii_expression = DOTII_EXPRESSION_LAUGH;
+    snapshot->dotii_expression = DOTII_EXPRESSION_FACE_SPARKLE;
     snapshot->dotii_state_assigned = true;
     snapshot->dotii_state_duration_ms = 0;
     snapshot->dotii_state_token = 1;
@@ -235,9 +235,10 @@ dotii_expression_t app_state_dotii_expression_from_string(const char *expression
     if (strcmp(expression, "complete") == 0) return DOTII_EXPRESSION_COMPLETE;
     if (strcmp(expression, "failure") == 0) return DOTII_EXPRESSION_FAILURE;
     if (strcmp(expression, "heart_eyes") == 0) return DOTII_EXPRESSION_HEART_EYES;
-    if (strcmp(expression, "cheeky") == 0) return DOTII_EXPRESSION_CHEEKY;
-    if (strcmp(expression, "smile") == 0) return DOTII_EXPRESSION_SMILE;
-    if (strcmp(expression, "laugh") == 0) return DOTII_EXPRESSION_LAUGH;
+    if (strcmp(expression, "face_smile") == 0) return DOTII_EXPRESSION_FACE_SMILE;
+    if (strcmp(expression, "face_wink") == 0) return DOTII_EXPRESSION_FACE_WINK;
+    if (strcmp(expression, "face_cozy") == 0) return DOTII_EXPRESSION_FACE_COZY;
+    if (strcmp(expression, "face_sparkle") == 0) return DOTII_EXPRESSION_FACE_SPARKLE;
     return DOTII_EXPRESSION_IDLE_BREATH;
 }
 
