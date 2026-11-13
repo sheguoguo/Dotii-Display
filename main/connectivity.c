@@ -33,6 +33,13 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+/* Kconfig 里的 bool 关掉后宏是未定义的，直接写 `else if (CONFIG_...)` 会编不过。 */
+#ifdef CONFIG_STATE_DISPLAY_DEMO_MODE
+#define DEMO_PREVIEW_ENABLED 1
+#else
+#define DEMO_PREVIEW_ENABLED 0
+#endif
+
 #define WIFI_CONNECTED_BIT BIT0
 #define REFRESH_REQUESTED_BIT BIT1
 #define HTTP_BODY_INITIAL_CAPACITY 49152
@@ -1154,7 +1161,7 @@ static void publish_offline_state(void)
         s_work_snapshot.stale = s_work_snapshot.generated_at > 0 && now > s_work_snapshot.generated_at &&
                                 (now - s_work_snapshot.generated_at) > CONFIG_STATE_DISPLAY_STALE_SECONDS;
         if (s_work_snapshot.stale) s_work_snapshot.status = CODEX_STATUS_OFFLINE;
-    } else if (CONFIG_STATE_DISPLAY_DEMO_MODE) {
+    } else if (DEMO_PREVIEW_ENABLED) {
         app_state_make_preview(&s_work_snapshot);
     } else {
         memset(&s_work_snapshot, 0, sizeof(s_work_snapshot));

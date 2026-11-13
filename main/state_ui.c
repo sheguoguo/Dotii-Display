@@ -1441,8 +1441,11 @@ static void build_main(void)
     lv_obj_remove_style(s_main_arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_main_arc, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *title = make_label(s_main_content, "Codex", &lv_font_montserrat_28, COLOR_TEXT);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
+    /* 这一页读的是 DeepSeek Harness 的状态（bridge --source dsh）。
+       "DeepSeek Harness" 在 28px 下宽 272px，而顶部 y=48 处圆屏只剩约 283px，
+       贴边太紧；换 22px 后是 214px，留出呼吸空间。 */
+    lv_obj_t *title = make_label(s_main_content, "DeepSeek Harness", &lv_font_montserrat_22, COLOR_TEXT);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 54);
     s_time_main = make_label(s_main_content, "--:--", &lv_font_montserrat_20, COLOR_MUTED);
     lv_obj_align(s_time_main, LV_ALIGN_TOP_MID, 0, 82);
 
@@ -1886,7 +1889,7 @@ static void build_detail(void)
 
     s_time_detail = make_label(safe, "--:--", &lv_font_montserrat_16, COLOR_MUTED);
     lv_obj_align(s_time_detail, LV_ALIGN_TOP_MID, 0, -34);
-    s_detail_title = make_centered_title(safe, ui_tr("开发 Codex 状态页面"),
+    s_detail_title = make_centered_title(safe, ui_tr("DeepSeek Harness 状态"),
                                          &ui_font_detail_20, 336, 282, 1, 2);
     lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
     lv_obj_set_style_bg_color(s_detail_title, color(COLOR_BG), 0);
@@ -2752,14 +2755,14 @@ static void build_settings(void)
     lv_obj_add_event_cb(refresh, refresh_clicked, LV_EVENT_CLICKED, NULL);
 
     make_setting_card(s_settings_list, ui_tr("页面显示 · 表情页"), ui_tr("首页，始终显示"));
-    make_page_toggle_row(s_settings_list, ui_tr("显示 Codex 页"), NULL, s_page_codex_visible, 1);
+    make_page_toggle_row(s_settings_list, ui_tr("显示 Harness 页"), NULL, s_page_codex_visible, 1);
     s_settings_reminder_detail = make_page_toggle_row(s_settings_list, ui_tr("显示久坐提醒页"),
                                                       ui_tr("已停止 · 60 分钟"),
                                                       s_page_reminder_visible, 2);
     make_page_toggle_row(s_settings_list, ui_tr("显示自定义页"), NULL, s_page_custom_visible, 3);
     s_settings_wifi = make_setting_card(s_settings_list, ui_tr("网络"), ui_tr("未配置"));
     s_settings_ip = make_setting_card(s_settings_list, ui_tr("设备地址"), "IP --");
-    s_settings_bridge = make_setting_card(s_settings_list, ui_tr("Codex 数据源"), ui_tr("未配置"));
+    s_settings_bridge = make_setting_card(s_settings_list, ui_tr("Harness 数据源"), ui_tr("未配置"));
     char device_info[72];
     snprintf(device_info, sizeof(device_info), "Dotii %s · ESP-IDF %s",
              esp_app_get_description()->version, esp_get_idf_version());
