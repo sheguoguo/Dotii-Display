@@ -153,15 +153,12 @@ static lv_obj_t *s_dotii_accent_center;
 static lv_obj_t *s_dotii_face;   /* 位图表情：一次创建，切换 src 即可 */
 static lv_obj_t *s_dotii_heart_lobe[4];
 static lv_obj_t *s_dotii_heart_body[2];
-static lv_obj_t *s_codex_quick;
-static lv_obj_t *s_bambu_quick;
-static lv_obj_t *s_custom_quick;
-static lv_obj_t *s_dotii_quick;
 static lv_obj_t *s_page_dots[PAGE_COUNT][PAGE_COUNT];
 static lv_point_t s_press_point;
 static uint8_t s_battery = 0xFF;
 static bool s_charging;
-static int s_brightness = 64;
+/* 默认亮度：AMOLED 在室内 30% 已经很亮，原来的 64% 偏刺眼。 */
+static int s_brightness = 30;
 static int16_t s_display_angle_tenths = DISPLAY_ANGLE_DEFAULT_TENTHS;
 static uint32_t s_display_revision;
 static uint32_t s_screen_off_timeout_seconds = 60;
@@ -528,15 +525,20 @@ static void swipe_event(lv_event_t *event)
     }
 }
 
-static void quick_clicked(lv_event_t *event)
+/* 控制中心只保留"设置"和"电源"两个入口：装上外壳后实体按键基本按不到，
+   这两个页面改为纯触摸进入。 */
+static void control_settings_event(lv_event_t *event)
 {
-    lv_obj_t *target = (lv_obj_t *)lv_event_get_user_data(event);
-    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
-        if (target == s_main) target = page_screen(1);
-        /* 目标页可能已在设置里被关闭，这时整块屏都不该出现。 */
-        if (!screen_enabled(target)) return;
-        load_screen_with_transition(target, TRANSITION_CONTROL_UP);
-    }
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    load_screen_with_transition(s_settings, TRANSITION_CONTROL_UP);
+}
+
+static void control_power_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    /* 电源页右滑返回时按 s_before_power 回退，这里必须记下控制中心。 */
+    s_before_power = s_control;
+    load_screen_with_transition(s_power, TRANSITION_CONTROL_UP);
 }
 
 static void brightness_changed(lv_event_t *event)
@@ -2447,40 +2449,23 @@ static void build_dotii(void)
     render_dotii_expression();
 }
 
-static lv_obj_t *make_quick_button(lv_obj_t *parent,
-                                   const lv_image_dsc_t *icon_source, uint32_t accent)
+/* 控制中心的入口按钮：一个图标 + 外框，风格沿用原快捷按钮的圆角卡片。 */
+static lv_obj_t *make_action_button(lv_obj_t *parent, const char *symbol, uint32_t accent)
 {
     lv_obj_t *button = lv_button_create(parent);
-    lv_obj_set_size(button, 78, 78);
-    lv_obj_set_style_radius(button, 20, 0);
+    lv_obj_set_size(button, 96, 96);
+    lv_obj_set_style_radius(button, 26, 0);
     lv_obj_set_style_bg_color(button, color(COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(button, 1, 0);
     lv_obj_set_style_border_color(button, color(accent), 0);
+    lv_obj_set_style_bg_color(button, color(0x1E2A27), LV_STATE_PRESSED);
     lv_obj_set_style_pad_all(button, 0, 0);
-    if (icon_source != NULL) {
-        lv_obj_t *icon = lv_image_create(button);
-        lv_image_set_src(icon, icon_source);
-        lv_obj_set_style_image_recolor(icon, color(accent), 0);
-        lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-        lv_obj_center(icon);
-    } else {
-        lv_obj_t *icon = lv_obj_create(button);
-        lv_obj_remove_style_all(icon);
-        lv_obj_set_size(icon, 36, 36);
-        lv_obj_center(icon);
-        static const int16_t positions[4][2] = {{1, 1}, {20, 1}, {1, 20}, {20, 20}};
-        for (size_t i = 0; i < 4; ++i) {
-            lv_obj_t *tile = lv_obj_create(icon);
-            lv_obj_remove_style_all(tile);
-            lv_obj_set_size(tile, 15, 15);
-            lv_obj_set_pos(tile, positions[i][0], positions[i][1]);
-            lv_obj_set_style_border_width(tile, 3, 0);
-            lv_obj_set_style_border_color(tile, color(accent), 0);
-            lv_obj_set_style_border_opa(tile, LV_OPA_COVER, 0);
-            lv_obj_set_style_radius(tile, 4, 0);
-        }
-    }
+    lv_obj_t *icon = make_label(button, symbol, &lv_font_montserrat_32, accent);
+    lv_obj_set_style_transform_scale(icon, 448, 0);
+    lv_obj_set_style_transform_pivot_x(icon, LV_PCT(50), 0);
+    lv_obj_set_style_transform_pivot_y(icon, LV_PCT(50), 0);
+    lv_obj_center(icon);
     return button;
 }
 
@@ -2506,25 +2491,23 @@ static void build_control(void)
     lv_obj_set_style_bg_color(s_brightness_slider, color(0xE9FFF7), LV_PART_KNOB);
     lv_obj_add_event_cb(s_brightness_slider, brightness_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
-    lv_obj_t *row = lv_obj_create(safe);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, 340, 82);
-    lv_obj_set_pos(row, 9, 156);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, 9, 0);
-    s_codex_quick = make_quick_button(row, &ui_icon_openai_36, COLOR_BLUE);
-    s_bambu_quick = make_quick_button(row, &ui_icon_bambu_36, COLOR_BAMBU);
-    s_custom_quick = make_quick_button(row, NULL, COLOR_WARNING);
-    s_dotii_quick = make_quick_button(row, NULL, COLOR_CYAN);
-    lv_obj_clean(s_dotii_quick);
-    make_dotii_part(s_dotii_quick, 12, 20, -12, -2, COLOR_CYAN);
-    make_dotii_part(s_dotii_quick, 12, 20, 12, -2, COLOR_CYAN);
-    lv_obj_add_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(s_codex_quick, quick_clicked, LV_EVENT_CLICKED, s_main);
-    lv_obj_add_event_cb(s_bambu_quick, quick_clicked, LV_EVENT_CLICKED, s_bambu_main);
-    lv_obj_add_event_cb(s_custom_quick, quick_clicked, LV_EVENT_CLICKED, s_custom);
-    lv_obj_add_event_cb(s_dotii_quick, quick_clicked, LV_EVENT_CLICKED, s_dotii);
+    /* 原来四个页面直达按钮已去掉：外壳装上后按键难按，这里只需要
+       "进设置"和"进电源页"这两个原本只能靠长按实体键到达的入口。 */
+    lv_obj_t *settings_button = make_action_button(safe, LV_SYMBOL_SETTINGS, COLOR_CYAN);
+    lv_obj_align(settings_button, LV_ALIGN_TOP_MID, -64, 150);
+    lv_obj_add_event_cb(settings_button, control_settings_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *settings_caption = make_label(safe, ui_tr("设置"), &s_ui_font, COLOR_MUTED);
+    lv_obj_set_width(settings_caption, 96);
+    lv_obj_set_style_text_align(settings_caption, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(settings_caption, LV_ALIGN_TOP_MID, -64, 254);
+
+    lv_obj_t *power_button = make_action_button(safe, LV_SYMBOL_POWER, COLOR_DANGER);
+    lv_obj_align(power_button, LV_ALIGN_TOP_MID, 64, 150);
+    lv_obj_add_event_cb(power_button, control_power_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *power_caption = make_label(safe, ui_tr("电源"), &s_ui_font, COLOR_MUTED);
+    lv_obj_set_width(power_caption, 96);
+    lv_obj_set_style_text_align(power_caption, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(power_caption, LV_ALIGN_TOP_MID, 64, 254);
 
     s_battery_label = make_label(safe, ui_tr("电量 --"), &s_ui_font, COLOR_MUTED);
     lv_obj_set_width(s_battery_label, 300);
@@ -2979,14 +2962,6 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         lv_obj_remove_flag(s_custom_body, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(s_custom_footer, LV_OBJ_FLAG_HIDDEN);
     }
-    if (snapshot->codex_enabled) lv_obj_remove_flag(s_codex_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_codex_quick, LV_OBJ_FLAG_HIDDEN);
-    if (snapshot->bambu_enabled) lv_obj_remove_flag(s_bambu_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_bambu_quick, LV_OBJ_FLAG_HIDDEN);
-    if (snapshot->custom_enabled) lv_obj_remove_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
-    if (snapshot->dotii_enabled) lv_obj_remove_flag(s_dotii_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_dotii_quick, LV_OBJ_FLAG_HIDDEN);
     render_dotii_expression();
     update_page_dots();
 
@@ -3066,6 +3041,9 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     s_detail_task = heap_caps_calloc(1, sizeof(*s_detail_task),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     load_persisted_settings();
+    /* BSP 初始化时把亮度拉到了 100%，这里立刻把界面记录的亮度落到硬件上。
+       否则开机后一直到第一次熄屏/唤醒之前，屏幕都是满亮度。 */
+    bsp_display_brightness_set(s_brightness);
     ESP_ERROR_CHECK(bsp_display_transform_set_angle(s_display_angle_tenths));
     s_ui_font = ui_font_fixed_20;
     s_ui_font.fallback = &ui_font_detail_20;
