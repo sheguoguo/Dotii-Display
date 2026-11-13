@@ -49,7 +49,7 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 /* 非首页停留多久无操作后自动回表情页。 */
 #define IDLE_RETURN_HOME_MS 30000u
 /* 表情页空闲多久（外部状态一直没有变化）后换成时钟显示。 */
-#define IDLE_CLOCK_MS 300000u
+#define IDLE_CLOCK_MS 60000u
 #define TITLE_HEIGHT 30
 #define DISPLAY_ANGLE_DEFAULT_TENTHS 840
 #define DISPLAY_ANGLE_MIN_TENTHS 800
@@ -429,7 +429,7 @@ static void load_screen_with_transition(lv_obj_t *screen, transition_t transitio
 
     s_current = screen;
     s_last_activity = lv_tick_get();
-    /* 任何时候回到表情页（翻页回来、点掉时钟、30 秒兜底），5 分钟空闲计时重来。
+    /* 任何时候回到表情页（翻页回来、点掉时钟、30 秒兜底），60 秒空闲计时重来。
        否则刚从时钟点回表情，下一拍就又被时钟顶掉。 */
     if (screen == s_dotii) s_activity_signal_tick = s_last_activity;
     s_screen_load_pending = true;
@@ -2434,7 +2434,7 @@ static void dotii_touch_event(lv_event_t *event)
     if (s_wake_touch_in_progress) return;
     s_dotii_touch_started = lv_tick_get();
     if (s_dotii_touch_started == 0) s_dotii_touch_started = 1;
-    /* 摸一下脸 = 有人在意它，5 分钟空闲计时重来，别下一秒就被时钟顶掉。 */
+    /* 摸一下脸 = 有人在意它，60 秒空闲计时重来，别下一秒就被时钟顶掉。 */
     s_activity_signal_tick = s_dotii_touch_started;
     render_dotii_expression();
 }
@@ -2489,10 +2489,10 @@ static void build_dotii(void)
 }
 
 /* ---- 空闲时钟（本定制版新增）-----------------------------------------
- * 表情页超过 5 分钟没有任何外部状态变化，就换成时钟显示；状态一变立刻切回表情。
+ * 表情页超过 60 秒没有任何外部状态变化，就换成时钟显示；状态一变立刻切回表情。
  * 数字是烘焙好的渐变位图（LVGL 只能给文字上单色，做不出渐变），
  * 秒环用 lv_arc：12 点起步、每秒 6°、60 秒满圈后归零重来。
- * 上限 5 分钟这个节奏刻意不给用户改，避免又多一个设置项。 */
+ * 60 秒这个节奏刻意不给用户改，避免又多一个设置项。 */
 #define CLOCK_RING_SIZE 444
 #define CLOCK_RING_WIDTH 16
 #define CLOCK_ROW_OFFSET 74
@@ -2504,7 +2504,7 @@ static void clock_touch_event(lv_event_t *event)
     /* 亮屏那一下的触摸不要顺手把时钟关掉。 */
     if (s_wake_touch_in_progress) return;
     if (s_current != s_clock) return;
-    /* 点一下表示"我在看"：回表情，并把 5 分钟重新计时。 */
+    /* 点一下表示"我在看"：回表情，并把 60 秒重新计时。 */
     s_activity_signal_tick = lv_tick_get();
     load_screen(s_dotii, false);
 }
@@ -2854,7 +2854,7 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         s_dotii_state_duration_ms = snapshot->dotii_state_duration_ms;
         s_dotii_state_expression = snapshot->dotii_expression;
         s_dotii_state_started = lv_tick_get();
-        /* 外部状态变了 = 不再是"空闲"：重置 5 分钟计时，并且把时钟切回表情。
+        /* 外部状态变了 = 不再是"空闲"：重置 60 秒计时，并且把时钟切回表情。
            等 DeepSeek harness 接入后，喂进来的就是 harness 的活动信号。 */
         s_activity_signal_tick = lv_tick_get();
         if (s_current == s_clock) load_screen(s_dotii, false);
@@ -3156,26 +3156,15 @@ static void ui_timer(lv_timer_t *timer)
     if (s_ignore_next_dotii_click && inactive_ms > 1000) {
         s_ignore_next_dotii_click = false;
     }
-    const uint32_t active_screen_off_timeout = s_external_power ?
-        s_charging_screen_off_timeout_seconds : s_screen_off_timeout_seconds;
-    const uint32_t active_sleep_timeout = s_external_power ?
-        s_charging_sleep_timeout_seconds : s_sleep_timeout_seconds;
-    /* 久坐提醒展示期间冻结熄屏与自动深睡：提醒必须亮着直到用户确认，
-       否则最深睡会直接把提醒吞掉。reminder_timer 会持续刷新 s_last_activity。 */
+    /* 久坐提醒展示期间冻结一切页面切换：提醒必须亮着直到用户确认。 */
     if (s_reminder_visible) return;
     /* 非表情页停留 30 秒无操作 → 自动回到表情首页。
-       刻意不改写 s_last_activity：熄屏与深睡仍按真实无操作时长推进，
-       否则每次回首页都会把休眠计时清零。
        时钟页和新图自动跳出的自定义页不参与这条规则：正被"主动显示"的东西
        不能 30 秒自己跑掉。 */
     if (s_current != s_clock && !s_custom_autoshow) {
         if (s_screen_on && !s_screen_saver_active && s_current != s_dotii &&
             inactive_ms > IDLE_RETURN_HOME_MS) {
-            /* load_screen 会把 s_last_activity 刷新成当前时刻，这里回填，
-               保持"无操作时长"连续，熄屏/深睡不被推迟。 */
-            const uint32_t last_activity = s_last_activity;
             load_screen(s_dotii, false);
-            s_last_activity = last_activity;
         }
     }
     /* 新图自动跳出的状态，只在还停在自定义页时有效；用户自己滑走就算看过。 */
@@ -3186,19 +3175,8 @@ static void ui_timer(lv_timer_t *timer)
         show_clock();
     }
     if (s_current == s_clock) clock_refresh();
-    /* 时钟显示期间、且插着电：不自动熄屏也不自动深睡。
-       默认熄屏 60 s / 深睡 300 s，正好把桌面时钟掐死，那这个功能就没意义了。
-       电池供电仍然按原超时省电。 */
-    const bool clock_hold = s_current == s_clock && s_external_power;
-    if (!clock_hold && s_screen_on && !s_screen_saver_active && active_screen_off_timeout > 0 &&
-        inactive_ms > active_screen_off_timeout * 1000U) {
-        if (!enter_screen_saver()) screen_off();
-    }
-    if (!clock_hold && !connectivity_usb_active() && active_sleep_timeout > 0 &&
-        inactive_ms > active_sleep_timeout * 1000U) {
-        s_last_activity = lv_tick_get();
-        board_input_request_sleep();
-    }
+    /* 自动熄屏与自动深睡已关闭：这台设备当桌面常亮屏用。
+       屏幕只会在手动短按 PWR 键时熄灭；深睡只能靠手动关机或拔电。 */
 }
 
 void state_ui_start(QueueHandle_t snapshot_queue)
@@ -3235,7 +3213,7 @@ void state_ui_start(QueueHandle_t snapshot_queue)
      * 必须在首帧渲染前真正切换活动屏幕。 */
     s_current = page_screen(0);
     s_last_activity = lv_tick_get();
-    /* 开机也算一次"刚有动静"，5 分钟后才轮到时钟。 */
+    /* 开机也算一次"刚有动静"，60 秒后才轮到时钟。 */
     s_activity_signal_tick = s_last_activity;
     lv_screen_load_anim(s_current, LV_SCREEN_LOAD_ANIM_NONE, 0, 0, false);
     lv_obj_invalidate(s_current);
