@@ -530,7 +530,9 @@
                 <span><span data-i18n="显示角度">显示角度 </span><output id="dock-angle-output">84.0°</output></span>
                 <input id="dock-angle" type="range" min="80" max="100" step="0.1" value="84">
               </label>
-              <div class="power-timeout-profiles">
+              <!-- 固件自 9f88a72 起取消自动熄屏与自动深睡（设备常亮），
+                   这两组超时不再驱动任何行为，先整体隐藏；要恢复删掉 style 即可。 -->
+              <div class="power-timeout-profiles" style="display:none">
               <section class="power-timeout-profile" aria-labelledby="battery-timeout-heading">
                 <div class="power-timeout-heading"><span class="power-icon" aria-hidden="true">−</span><div><h4 id="battery-timeout-heading"><span data-i18n="使用电池时">使用电池时</span></h4></div></div>
                 <div class="timeout-settings">
