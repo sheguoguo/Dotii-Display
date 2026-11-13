@@ -22,6 +22,7 @@
 #include "sdkconfig.h"
 #include "ui_icons.h"
 #include "dotii_faces.h"
+#include "clock_digits.h"
 
 LV_FONT_DECLARE(ui_font_chinese_semibold_24);
 LV_FONT_DECLARE(ui_font_bambu_semibold_24);
@@ -47,6 +48,8 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 #define PAGE_COUNT 4
 /* 非首页停留多久无操作后自动回表情页。 */
 #define IDLE_RETURN_HOME_MS 30000u
+/* 表情页空闲多久（外部状态一直没有变化）后换成时钟显示。 */
+#define IDLE_CLOCK_MS 300000u
 #define TITLE_HEIGHT 30
 #define DISPLAY_ANGLE_DEFAULT_TENTHS 840
 #define DISPLAY_ANGLE_MIN_TENTHS 800
@@ -81,6 +84,21 @@ static lv_obj_t *s_dotii;
 static lv_obj_t *s_control;
 static lv_obj_t *s_settings;
 static lv_obj_t *s_power;
+/* 空闲时钟：表情页的"另一种显示"，仍然算第 0 页。 */
+static lv_obj_t *s_clock;
+static lv_obj_t *s_clock_arc;
+static lv_obj_t *s_clock_hours[2];
+static lv_obj_t *s_clock_minutes[2];
+static int s_clock_last_minute = -1;
+static uint32_t s_clock_seconds_zero;
+/* 最近一次"外部状态变化"（目前是 dotii 状态 token / 自定义内容版本）的时刻。
+   换成 DeepSeek harness 数据源之后，这个信号由 harness 上报驱动。 */
+static uint32_t s_activity_signal_tick;
+/* 自定义页收到新图后自动跳出，必须点一下才回表情页。 */
+static bool s_custom_autoshow;
+static bool s_custom_revision_seen_valid;
+static uint32_t s_custom_image_revision_seen;
+static uint32_t s_custom_animation_revision_seen;
 static lv_obj_t *s_before_power;
 static lv_obj_t *s_before_control;
 static lv_obj_t *s_before_screen_saver;
@@ -411,6 +429,9 @@ static void load_screen_with_transition(lv_obj_t *screen, transition_t transitio
 
     s_current = screen;
     s_last_activity = lv_tick_get();
+    /* 任何时候回到表情页（翻页回来、点掉时钟、30 秒兜底），5 分钟空闲计时重来。
+       否则刚从时钟点回表情，下一拍就又被时钟顶掉。 */
+    if (screen == s_dotii) s_activity_signal_tick = s_last_activity;
     s_screen_load_pending = true;
     s_pending_screen = screen;
     s_pending_transition = transition;
@@ -1310,6 +1331,8 @@ static lv_obj_t *page_screen(uint8_t page)
 static int page_index_of_screen(lv_obj_t *screen)
 {
     if (screen == NULL) return -1;
+    /* 时钟是表情页的另一种显示，仍按第 0 页处理：左右滑、返回、页点都对得上。 */
+    if (screen == s_clock) return 0;
     for (uint8_t page = 0; page < PAGE_COUNT; ++page) {
         if (page_screen(page) == screen) return page;
     }
@@ -2056,12 +2079,26 @@ static void build_bambu(void)
     lv_obj_align(s_bambu_layer, LV_ALIGN_TOP_MID, 0, 388);
 }
 
+/* 新图自动跳出后，点任意位置才算看过：回表情页。 */
+static void custom_touch_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_SHORT_CLICKED) return;
+    if (!s_custom_autoshow || s_current != s_custom) return;
+    /* 亮屏那一下的触摸只是唤醒，不算"看过了"。 */
+    if (s_wake_touch_in_progress) return;
+    s_custom_autoshow = false;
+    s_activity_signal_tick = lv_tick_get();
+    load_screen(s_dotii, false);
+}
+
 static void build_custom(void)
 {
     s_custom = lv_obj_create(NULL);
     set_screen_background(s_custom);
     add_activity_event(s_custom);
     lv_obj_add_event_cb(s_custom, swipe_event, LV_EVENT_GESTURE, NULL);
+    lv_obj_add_event_cb(s_custom, custom_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_flag(s_custom, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *content = lv_obj_create(s_custom);
     lv_obj_remove_style_all(content);
@@ -2397,6 +2434,8 @@ static void dotii_touch_event(lv_event_t *event)
     if (s_wake_touch_in_progress) return;
     s_dotii_touch_started = lv_tick_get();
     if (s_dotii_touch_started == 0) s_dotii_touch_started = 1;
+    /* 摸一下脸 = 有人在意它，5 分钟空闲计时重来，别下一秒就被时钟顶掉。 */
+    s_activity_signal_tick = s_dotii_touch_started;
     render_dotii_expression();
 }
 
@@ -2447,6 +2486,99 @@ static void build_dotii(void)
        必须让用户看见还有其他页面可切，因此恢复导航点。 */
     make_page_dots(s_dotii, 0);
     render_dotii_expression();
+}
+
+/* ---- 空闲时钟（本定制版新增）-----------------------------------------
+ * 表情页超过 5 分钟没有任何外部状态变化，就换成时钟显示；状态一变立刻切回表情。
+ * 数字是烘焙好的渐变位图（LVGL 只能给文字上单色，做不出渐变），
+ * 秒环用 lv_arc：12 点起步、每秒 6°、60 秒满圈后归零重来。
+ * 上限 5 分钟这个节奏刻意不给用户改，避免又多一个设置项。 */
+#define CLOCK_RING_SIZE 444
+#define CLOCK_RING_WIDTH 16
+#define CLOCK_ROW_OFFSET 74
+#define CLOCK_DIGIT_OFFSET 50
+
+static void clock_touch_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_SHORT_CLICKED) return;
+    /* 亮屏那一下的触摸不要顺手把时钟关掉。 */
+    if (s_wake_touch_in_progress) return;
+    if (s_current != s_clock) return;
+    /* 点一下表示"我在看"：回表情，并把 5 分钟重新计时。 */
+    s_activity_signal_tick = lv_tick_get();
+    load_screen(s_dotii, false);
+}
+
+static void clock_refresh(void)
+{
+    if (s_clock_arc == NULL) return;
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    const int minute_of_day = local.tm_year >= 120 ? local.tm_hour * 60 + local.tm_min : -1;
+
+    if (minute_of_day != s_clock_last_minute) {
+        s_clock_last_minute = minute_of_day;
+        const int hour = local.tm_year >= 120 ? local.tm_hour : 0;
+        const int minute = local.tm_year >= 120 ? local.tm_min : 0;
+        lv_image_set_src(s_clock_hours[0], clock_digit_hours[hour / 10]);
+        lv_image_set_src(s_clock_hours[1], clock_digit_hours[hour % 10]);
+        lv_image_set_src(s_clock_minutes[0], clock_digit_minutes[minute / 10]);
+        lv_image_set_src(s_clock_minutes[1], clock_digit_minutes[minute % 10]);
+    }
+
+    /* 秒环：从进入时钟那一刻开始数，不跟系统秒对齐。 */
+    const uint32_t elapsed_seconds = lv_tick_elaps(s_clock_seconds_zero) / 1000u;
+    const int second = (int)(elapsed_seconds % 60u);
+    lv_arc_set_angles(s_clock_arc, 0, (second + 1) * 6);
+}
+
+static void build_clock(void)
+{
+    s_clock = lv_obj_create(NULL);
+    set_screen_background(s_clock);
+    add_activity_event(s_clock);
+    lv_obj_add_event_cb(s_clock, swipe_event, LV_EVENT_GESTURE, NULL);
+    lv_obj_add_event_cb(s_clock, clock_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_flag(s_clock, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 环的角度原点转到 12 点方向：0° = 12 点，顺时针增长。 */
+    s_clock_arc = lv_arc_create(s_clock);
+    lv_obj_set_size(s_clock_arc, CLOCK_RING_SIZE, CLOCK_RING_SIZE);
+    lv_obj_center(s_clock_arc);
+    lv_arc_set_rotation(s_clock_arc, 270);
+    lv_arc_set_bg_angles(s_clock_arc, 0, 360);
+    lv_obj_set_style_arc_width(s_clock_arc, CLOCK_RING_WIDTH, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_clock_arc, color(0x0E2A29), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_clock_arc, CLOCK_RING_WIDTH, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_clock_arc, color(COLOR_CYAN), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_clock_arc, true, LV_PART_INDICATOR);
+    lv_obj_remove_style(s_clock_arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(s_clock_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_arc_set_angles(s_clock_arc, 0, 0);
+
+    for (int index = 0; index < 2; ++index) {
+        s_clock_hours[index] = lv_image_create(s_clock);
+        lv_image_set_src(s_clock_hours[index], clock_digit_hours[0]);
+        lv_obj_remove_flag(s_clock_hours[index], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(s_clock_hours[index], LV_ALIGN_CENTER,
+                     index == 0 ? -CLOCK_DIGIT_OFFSET : CLOCK_DIGIT_OFFSET, -CLOCK_ROW_OFFSET);
+
+        s_clock_minutes[index] = lv_image_create(s_clock);
+        lv_image_set_src(s_clock_minutes[index], clock_digit_minutes[0]);
+        lv_obj_remove_flag(s_clock_minutes[index], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(s_clock_minutes[index], LV_ALIGN_CENTER,
+                     index == 0 ? -CLOCK_DIGIT_OFFSET : CLOCK_DIGIT_OFFSET, CLOCK_ROW_OFFSET);
+    }
+    /* 时钟是环境显示，故意不显示页点。 */
+    s_clock_last_minute = -1;
+}
+
+static void show_clock(void)
+{
+    s_clock_seconds_zero = lv_tick_get();
+    s_clock_last_minute = -1;
+    load_screen(s_clock, false);
 }
 
 /* 控制中心的入口按钮：一个图标 + 外框，风格沿用原快捷按钮的圆角卡片。 */
@@ -2722,6 +2854,10 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         s_dotii_state_duration_ms = snapshot->dotii_state_duration_ms;
         s_dotii_state_expression = snapshot->dotii_expression;
         s_dotii_state_started = lv_tick_get();
+        /* 外部状态变了 = 不再是"空闲"：重置 5 分钟计时，并且把时钟切回表情。
+           等 DeepSeek harness 接入后，喂进来的就是 harness 的活动信号。 */
+        s_activity_signal_tick = lv_tick_get();
+        if (s_current == s_clock) load_screen(s_dotii, false);
     }
     s_snapshot = *snapshot;
     if (snapshot->docked_rotation_tenths >= DISPLAY_ANGLE_MIN_TENTHS &&
@@ -2962,6 +3098,21 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         lv_obj_remove_flag(s_custom_body, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(s_custom_footer, LV_OBJ_FLAG_HIDDEN);
     }
+    /* 新图/新动画到达：直接跳到自定义页显示，等用户点一下才回表情页。
+       只在页面环上抢屏，设置/控制中心/电源页不打断。 */
+    const bool new_custom_content =
+        (snapshot->custom_image_available &&
+         snapshot->custom_image_revision != s_custom_image_revision_seen) ||
+        (snapshot->custom_animation_available &&
+         snapshot->custom_animation_revision != s_custom_animation_revision_seen);
+    if (s_custom_revision_seen_valid && new_custom_content && page_enabled(3)) {
+        s_custom_autoshow = true;
+        s_activity_signal_tick = lv_tick_get();
+        if (page_index_of_screen(s_current) >= 0) load_screen(s_custom, false);
+    }
+    s_custom_image_revision_seen = snapshot->custom_image_revision;
+    s_custom_animation_revision_seen = snapshot->custom_animation_revision;
+    s_custom_revision_seen_valid = true;
     render_dotii_expression();
     update_page_dots();
 
@@ -3014,20 +3165,37 @@ static void ui_timer(lv_timer_t *timer)
     if (s_reminder_visible) return;
     /* 非表情页停留 30 秒无操作 → 自动回到表情首页。
        刻意不改写 s_last_activity：熄屏与深睡仍按真实无操作时长推进，
-       否则每次回首页都会把休眠计时清零。 */
-    if (s_screen_on && !s_screen_saver_active && s_current != s_dotii &&
-        inactive_ms > IDLE_RETURN_HOME_MS) {
-        /* load_screen 会把 s_last_activity 刷新成当前时刻，这里回填，
-           保持"无操作时长"连续，熄屏/深睡不被推迟。 */
-        const uint32_t last_activity = s_last_activity;
-        load_screen(s_dotii, false);
-        s_last_activity = last_activity;
+       否则每次回首页都会把休眠计时清零。
+       时钟页和新图自动跳出的自定义页不参与这条规则：正被"主动显示"的东西
+       不能 30 秒自己跑掉。 */
+    if (s_current != s_clock && !s_custom_autoshow) {
+        if (s_screen_on && !s_screen_saver_active && s_current != s_dotii &&
+            inactive_ms > IDLE_RETURN_HOME_MS) {
+            /* load_screen 会把 s_last_activity 刷新成当前时刻，这里回填，
+               保持"无操作时长"连续，熄屏/深睡不被推迟。 */
+            const uint32_t last_activity = s_last_activity;
+            load_screen(s_dotii, false);
+            s_last_activity = last_activity;
+        }
     }
-    if (s_screen_on && !s_screen_saver_active && active_screen_off_timeout > 0 &&
+    /* 新图自动跳出的状态，只在还停在自定义页时有效；用户自己滑走就算看过。 */
+    if (s_custom_autoshow && s_current != s_custom) s_custom_autoshow = false;
+    /* 表情页空闲够久 → 换成时钟。状态一变由 update_snapshot 切回来。 */
+    if (s_current == s_dotii && s_screen_on && !s_screen_saver_active &&
+        lv_tick_elaps(s_activity_signal_tick) >= IDLE_CLOCK_MS) {
+        show_clock();
+    }
+    if (s_current == s_clock) clock_refresh();
+    /* 时钟显示期间、且插着电：不自动熄屏也不自动深睡。
+       默认熄屏 60 s / 深睡 300 s，正好把桌面时钟掐死，那这个功能就没意义了。
+       电池供电仍然按原超时省电。 */
+    const bool clock_hold = s_current == s_clock && s_external_power;
+    if (!clock_hold && s_screen_on && !s_screen_saver_active && active_screen_off_timeout > 0 &&
         inactive_ms > active_screen_off_timeout * 1000U) {
         if (!enter_screen_saver()) screen_off();
     }
-    if (!connectivity_usb_active() && active_sleep_timeout > 0 && inactive_ms > active_sleep_timeout * 1000U) {
+    if (!clock_hold && !connectivity_usb_active() && active_sleep_timeout > 0 &&
+        inactive_ms > active_sleep_timeout * 1000U) {
         s_last_activity = lv_tick_get();
         board_input_request_sleep();
     }
@@ -3053,6 +3221,7 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     build_bambu();
     build_custom();
     build_dotii();
+    build_clock();
     build_reminder();
     build_reminder_setup();
     build_settings();
@@ -3066,6 +3235,8 @@ void state_ui_start(QueueHandle_t snapshot_queue)
      * 必须在首帧渲染前真正切换活动屏幕。 */
     s_current = page_screen(0);
     s_last_activity = lv_tick_get();
+    /* 开机也算一次"刚有动静"，5 分钟后才轮到时钟。 */
+    s_activity_signal_tick = s_last_activity;
     lv_screen_load_anim(s_current, LV_SCREEN_LOAD_ANIM_NONE, 0, 0, false);
     lv_obj_invalidate(s_current);
     /* Push one complete first frame while the caller still owns the BSP LVGL
