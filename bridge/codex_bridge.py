@@ -31,6 +31,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from codex_app_server import probe_app_server, run_collector
+from dsh_reader import run_dsh_collector
 from bambu_client import BambuConfigStore, BambuService
 from bluetooth_bridge import BluetoothBridge
 from firmware_flasher import FirmwareFlasher
@@ -1817,6 +1818,10 @@ def main() -> None:
     parser.add_argument("--app-server", action="store_true", help="read account and task state through Codex app-server")
     parser.add_argument("--codex-command", help="path to a standalone Codex CLI executable or codex.js")
     parser.add_argument("--app-server-interval", type=float, default=2.0)
+    parser.add_argument("--source", choices=("codex", "dsh"), default="codex",
+                        help="数据源：codex=本机 Codex app-server；dsh=DeepSeek Harness 会话日志")
+    parser.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh",
+                        help="DSH 数据目录（--source dsh 时使用）")
     parser.add_argument("--parent-pid", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--development", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
@@ -1867,7 +1872,22 @@ def main() -> None:
             name="dotii-parent-watchdog",
             daemon=True,
         ).start()
-    if arguments.app_server:
+    if arguments.source == "dsh":
+        # 读 DeepSeek Harness 的会话日志（服务器部署用），不需要 Codex CLI。
+        threading.Thread(
+            target=run_dsh_collector,
+            kwargs={
+                "dsh_home": arguments.dsh_home.expanduser(),
+                "stop": stop,
+                "publish": lambda snapshot: store.write(validate_snapshot(snapshot)),
+                "report": runtime.report,
+                "enabled": lambda: modules.read()["codex"],
+                "interval": max(0.5, arguments.app_server_interval),
+            },
+            name="dsh-collector",
+            daemon=True,
+        ).start()
+    elif arguments.app_server:
         threading.Thread(
             target=run_collector,
             kwargs={
