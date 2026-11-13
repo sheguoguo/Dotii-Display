@@ -32,6 +32,7 @@ from urllib.parse import unquote, urlparse
 
 from codex_app_server import probe_app_server, run_collector
 from dsh_reader import run_dsh_collector
+from dsh_hook_state import HarnessHookStore
 from bambu_client import BambuConfigStore, BambuService
 from bluetooth_bridge import BluetoothBridge
 from firmware_flasher import FirmwareFlasher
@@ -263,6 +264,39 @@ def _is_loopback(address: str) -> bool:
         return ipaddress.ip_address(address).is_loopback
     except ValueError:
         return False
+
+# 默认只有 loopback 能碰管理界面。--allow-admin-cidr 可以额外放行几个网段，
+# 给"后台跑在服务器上、人在另一台机器改配置"这种部署用。
+# 放行的是**整个管理面**（配置、发图、模块开关），不是设备用的快照接口。
+_admin_allow_networks: tuple[ipaddress._BaseNetwork, ...] = ()
+
+
+def configure_admin_allowlist(spec: str | None) -> tuple[ipaddress._BaseNetwork, ...]:
+    global _admin_allow_networks
+    networks: list[ipaddress._BaseNetwork] = []
+    for raw in (spec or "").split(","):
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(text, strict=False))
+        except ValueError as error:
+            raise ValueError(f"无效的 --allow-admin-cidr 网段 {text!r}：{error}") from error
+    _admin_allow_networks = tuple(networks)
+    return _admin_allow_networks
+
+
+def _admin_network_allows(address: str) -> bool:
+    if not _admin_allow_networks:
+        return False
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return any(network.version == ip.version and ip in network for network in _admin_allow_networks)
 
 
 def local_ipv4() -> str:
@@ -1246,7 +1280,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         return secrets.compare_digest(self.headers.get("X-Bridge-Token", ""), self.bridge.token)
 
     def _local_admin(self) -> bool:
-        return _is_loopback(self.client_address[0])
+        address = self.client_address[0]
+        return _is_loopback(address) or _admin_network_allows(address)
 
     def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
         try:
@@ -1389,6 +1424,16 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self._overview())
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+        elif path == "/api/v1/admin/harness/state":
+            if self._deny_nonlocal():
+                return
+            try:
+                if self.bridge.dsh_hook is None:
+                    raise ValueError("当前进程没有启用 DSH hook 数据源")
+                task = self.bridge.dsh_hook.current_task()
+                self._send_json(HTTPStatus.OK, {"state": self.bridge.dsh_hook.read(), "task": task})
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
         elif path == "/api/v1/admin/custom/source":
             if self._deny_nonlocal():
                 return
@@ -1467,6 +1512,28 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 result["collector"] = self.bridge.runtime.snapshot()
                 self.bridge.codex_check.write(result)
                 self._send_json(HTTPStatus.OK, result)
+            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/harness/state":
+            if self._deny_nonlocal():
+                return
+            try:
+                payload = self._read_admin_action()
+                if self.bridge.dsh_hook is None:
+                    raise ValueError("当前进程没有启用 DSH hook 数据源")
+                event = payload.get("event")
+                if not isinstance(event, str) or not event:
+                    raise ValueError("缺少 event")
+                context = payload.get("context")
+                if context is not None and not isinstance(context, dict):
+                    raise ValueError("context 必须是对象")
+                state = self.bridge.dsh_hook.ingest(event, context)
+                self._send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "state": state,
+                    "task": self.bridge.dsh_hook.current_task(),
+                })
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -1757,6 +1824,7 @@ class BridgeServer(ThreadingHTTPServer):
         application_folder: Path,
         codex_command: str | None,
         host_parent_pid: int = 0,
+        dsh_hook: HarnessHookStore | None = None,
     ) -> None:
         super().__init__(address, BridgeHandler)
         self.store = store
@@ -1777,6 +1845,7 @@ class BridgeServer(ThreadingHTTPServer):
         self.application_folder = application_folder
         self.codex_command = codex_command
         self.host_parent_pid = host_parent_pid
+        self.dsh_hook = dsh_hook
         self.connections = ConnectionSettings(runtime_folder / "connection.json")
         self.usb = UsbBridge(self)
         self.wifi_seen = {}
@@ -1788,6 +1857,13 @@ class BridgeServer(ThreadingHTTPServer):
 
     def snapshot(self) -> dict[str, Any]:
         snapshot = self.store.read()
+        # dsh-hooks 推送的 DeepSeek Harness 实时状态优先于任何轮询采集器：
+        # 只要收到过事件就一直用它，活跃态由 dsh_hook_state 的保持窗口退化成 idle。
+        hook_task = self.dsh_hook.current_task() if self.dsh_hook is not None else None
+        if hook_task is not None:
+            snapshot["codex"]["task"] = hook_task
+            snapshot["codex"]["tasks"] = [hook_task]
+            snapshot["preview_data"] = False
         custom = self.custom.read()
         custom.update(self.assets.source_info())
         custom.update(self.assets.render_info())
@@ -1822,10 +1898,19 @@ def main() -> None:
                         help="数据源：codex=本机 Codex app-server；dsh=DeepSeek Harness 会话日志")
     parser.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh",
                         help="DSH 数据目录（--source dsh 时使用）")
+    parser.add_argument("--allow-admin-cidr", default="",
+                        help="额外允许访问管理界面的网段，逗号分隔（如 173.5.28.0/24）；默认只允许本机")
     parser.add_argument("--parent-pid", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--development", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        allowed_networks = configure_admin_allowlist(arguments.allow_admin_cidr)
+    except ValueError as error:
+        raise SystemExit(str(error))
+    if allowed_networks:
+        logging.warning("管理界面额外放行：%s（这些地址可改配置、发图）",
+                        ", ".join(str(network) for network in allowed_networks))
     # Preserve the user's enabled/disabled choice while repairing stale paths
     # and releases that incorrectly registered DotiiBridge.exe as the login app.
     try:
@@ -1860,10 +1945,12 @@ def main() -> None:
     bluetooth = BluetoothBridge(writable_root)
     bluetooth.start()
     firmware = FirmwareFlasher(project_root(), writable_root)
+    # dsh-hooks 推来的 DeepSeek Harness 事件落在这个文件里，与 state.json 互不覆盖。
+    dsh_hook = HarnessHookStore(writable_root / "dsh-hook.json")
     server = BridgeServer((arguments.host, arguments.port), store, token, runtime, collector_restart,
                           custom, modules, dotii, display, codex_check, assets, bambu_config, bambu,
                           bluetooth, firmware, writable_root, application_root(), arguments.codex_command,
-                          arguments.parent_pid)
+                          arguments.parent_pid, dsh_hook)
     server.usb.start()
     if arguments.parent_pid > 1:
         threading.Thread(
