@@ -22,13 +22,14 @@
 #include "sdkconfig.h"
 #include "ui_icons.h"
 #include "dotii_faces.h"
-#include "clock_digits.h"
+#include "clock_face.h"
 
 LV_FONT_DECLARE(ui_font_chinese_semibold_24);
 LV_FONT_DECLARE(ui_font_bambu_semibold_24);
 LV_FONT_DECLARE(ui_font_digits_64);
 LV_FONT_DECLARE(ui_font_detail_20);
 LV_FONT_DECLARE(ui_font_fixed_20);
+LV_FONT_DECLARE(ui_font_clock_93);
 
 #define SCREEN_SIZE 466
 #define SAFE_SIZE 358
@@ -87,8 +88,8 @@ static lv_obj_t *s_power;
 /* 空闲时钟：表情页的"另一种显示"，仍然算第 0 页。 */
 static lv_obj_t *s_clock;
 static lv_obj_t *s_clock_arc;
-static lv_obj_t *s_clock_hours[2];
-static lv_obj_t *s_clock_minutes[2];
+static lv_obj_t *s_clock_time;
+static lv_obj_t *s_clock_date;
 static int s_clock_last_minute = -1;
 static uint32_t s_clock_seconds_zero;
 /* 最近一次"外部状态变化"（目前是 dotii 状态 token / 自定义内容版本）的时刻。
@@ -2493,13 +2494,21 @@ static void build_dotii(void)
 
 /* ---- 空闲时钟（本定制版新增）-----------------------------------------
  * 表情页超过 60 秒没有任何外部状态变化，就换成时钟显示；状态一变立刻切回表情。
- * 数字是烘焙好的渐变位图（LVGL 只能给文字上单色，做不出渐变），
- * 秒环用 lv_arc：12 点起步、每秒 6°、60 秒满圈后归零重来。
+ * 视觉来自资料库 rabbit-clock.html 的「奶油」主题，1:1 复刻：
+ *   - 静态部分（奶油径向渐变、左上高光、边缘暗角、12 个刻度点、r=216 轨道环、
+ *     兔兔本体）由 scripts/generate_clock_face.py 烘焙成一张 466×466 位图；
+ *   - 秒弧交给 lv_arc，同样的半径和线宽，每秒 6°；
+ *   - 时间用 Baloo 2 ExtraBold 93px（数字等宽），日期用 20px 中文字体。
  * 60 秒这个节奏刻意不给用户改，避免又多一个设置项。 */
-#define CLOCK_RING_SIZE 444
-#define CLOCK_RING_WIDTH 16
-#define CLOCK_ROW_OFFSET 74
-#define CLOCK_DIGIT_OFFSET 50
+#define CLOCK_ARC_RADIUS 219          /* 弧外沿半径：216 的环心 + 半个线宽 */
+#define CLOCK_ARC_SIZE (CLOCK_ARC_RADIUS * 2)
+#define CLOCK_ARC_WIDTH 6
+#define CLOCK_ARC_COLOR 0xFF7A59      /* 参考页 --accent */
+#define CLOCK_TIME_COLOR 0x3B3230     /* 参考页 --ink */
+#define CLOCK_DATE_COLOR 0xA68F7C     /* 参考页 --muted */
+/* 两行文字的顶边 = 基线 - (line_height - base_line)，取值来自生成字体的 lv_font_t */
+#define CLOCK_TIME_TOP (CLOCK_TIME_BASELINE - (61 - 2))    /* ui_font_clock_93 */
+#define CLOCK_DATE_TOP (CLOCK_DATE_BASELINE - (25 - 6))    /* ui_font_detail_20 */
 
 static void clock_touch_event(lv_event_t *event)
 {
@@ -2518,19 +2527,27 @@ static void clock_refresh(void)
     time_t now = time(NULL);
     struct tm local;
     localtime_r(&now, &local);
-    const int minute_of_day = local.tm_year >= 120 ? local.tm_hour * 60 + local.tm_min : -1;
+    const bool time_valid = local.tm_year >= 120;
+    const int minute_of_day = time_valid ? local.tm_hour * 60 + local.tm_min : -1;
 
     if (minute_of_day != s_clock_last_minute) {
         s_clock_last_minute = minute_of_day;
-        const int hour = local.tm_year >= 120 ? local.tm_hour : 0;
-        const int minute = local.tm_year >= 120 ? local.tm_min : 0;
-        lv_image_set_src(s_clock_hours[0], clock_digit_hours[hour / 10]);
-        lv_image_set_src(s_clock_hours[1], clock_digit_hours[hour % 10]);
-        lv_image_set_src(s_clock_minutes[0], clock_digit_minutes[minute / 10]);
-        lv_image_set_src(s_clock_minutes[1], clock_digit_minutes[minute % 10]);
+        if (time_valid) {
+            static const char *const weekdays[] = {
+                ui_tr("周日"), ui_tr("周一"), ui_tr("周二"), ui_tr("周三"),
+                ui_tr("周四"), ui_tr("周五"), ui_tr("周六"),
+            };
+            lv_label_set_text_fmt(s_clock_time, "%02d:%02d", local.tm_hour, local.tm_min);
+            lv_label_set_text_fmt(s_clock_date, ui_tr("%d月%d日 · %s"),
+                                  local.tm_mon + 1, local.tm_mday,
+                                  weekdays[local.tm_wday]);
+        } else {
+            lv_label_set_text(s_clock_time, "");
+            lv_label_set_text(s_clock_date, "");
+        }
     }
 
-    /* 秒环：从进入时钟那一刻开始数，不跟系统秒对齐。 */
+    /* 秒弧：从进入时钟那一刻开始数，不跟系统秒对齐。 */
     const uint32_t elapsed_seconds = lv_tick_elaps(s_clock_seconds_zero) / 1000u;
     const int second = (int)(elapsed_seconds % 60u);
     lv_arc_set_angles(s_clock_arc, 0, (second + 1) * 6);
@@ -2545,34 +2562,36 @@ static void build_clock(void)
     lv_obj_add_event_cb(s_clock, clock_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
     lv_obj_add_flag(s_clock, LV_OBJ_FLAG_CLICKABLE);
 
-    /* 环的角度原点转到 12 点方向：0° = 12 点，顺时针增长。 */
+    /* 奶油底图：渐变、高光、暗角、刻度、轨道环、兔兔全部在里面。 */
+    lv_obj_t *face = lv_image_create(s_clock);
+    lv_image_set_src(face, &clock_face_dsc);
+    lv_obj_center(face);
+    lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 秒弧：底图已经画了轨道环，这里把 arc 自带的轨道设成全透明，只留指示段。
+       环的角度原点转到 12 点方向：0° = 12 点，顺时针增长。 */
     s_clock_arc = lv_arc_create(s_clock);
-    lv_obj_set_size(s_clock_arc, CLOCK_RING_SIZE, CLOCK_RING_SIZE);
+    lv_obj_set_size(s_clock_arc, CLOCK_ARC_SIZE, CLOCK_ARC_SIZE);
     lv_obj_center(s_clock_arc);
     lv_arc_set_rotation(s_clock_arc, 270);
     lv_arc_set_bg_angles(s_clock_arc, 0, 360);
-    lv_obj_set_style_arc_width(s_clock_arc, CLOCK_RING_WIDTH, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_clock_arc, color(0x0E2A29), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_clock_arc, CLOCK_RING_WIDTH, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_clock_arc, color(COLOR_CYAN), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(s_clock_arc, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_clock_arc, CLOCK_ARC_WIDTH, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_clock_arc, color(CLOCK_ARC_COLOR), LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_clock_arc, true, LV_PART_INDICATOR);
     lv_obj_remove_style(s_clock_arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_clock_arc, LV_OBJ_FLAG_CLICKABLE);
     lv_arc_set_angles(s_clock_arc, 0, 0);
 
-    for (int index = 0; index < 2; ++index) {
-        s_clock_hours[index] = lv_image_create(s_clock);
-        lv_image_set_src(s_clock_hours[index], clock_digit_hours[0]);
-        lv_obj_remove_flag(s_clock_hours[index], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(s_clock_hours[index], LV_ALIGN_CENTER,
-                     index == 0 ? -CLOCK_DIGIT_OFFSET : CLOCK_DIGIT_OFFSET, -CLOCK_ROW_OFFSET);
+    s_clock_time = make_label(s_clock, "", &ui_font_clock_93, CLOCK_TIME_COLOR);
+    lv_obj_align(s_clock_time, LV_ALIGN_TOP_MID, 0, CLOCK_TIME_TOP);
 
-        s_clock_minutes[index] = lv_image_create(s_clock);
-        lv_image_set_src(s_clock_minutes[index], clock_digit_minutes[0]);
-        lv_obj_remove_flag(s_clock_minutes[index], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(s_clock_minutes[index], LV_ALIGN_CENTER,
-                     index == 0 ? -CLOCK_DIGIT_OFFSET : CLOCK_DIGIT_OFFSET, CLOCK_ROW_OFFSET);
-    }
+    /* 日期用 20px 中文字体：只有它带「月 / 日 / 周 / 一~六 / ·」这些字形。 */
+    s_clock_date = make_label(s_clock, "", &ui_font_detail_20, CLOCK_DATE_COLOR);
+    lv_obj_set_style_text_letter_space(s_clock_date, 3, 0);
+    lv_obj_set_style_text_align(s_clock_date, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_clock_date, LV_ALIGN_TOP_MID, 0, CLOCK_DATE_TOP);
+
     /* 时钟是环境显示，故意不显示页点。 */
     s_clock_last_minute = -1;
 }
@@ -2581,6 +2600,8 @@ static void show_clock(void)
 {
     s_clock_seconds_zero = lv_tick_get();
     s_clock_last_minute = -1;
+    /* 立刻填一次时间，避免切进来先空一拍。 */
+    clock_refresh();
     load_screen(s_clock, false);
 }
 

@@ -14,9 +14,10 @@ idf_component_register(
         "generated/ui_font_chinese_semibold_24.c"
         "generated/ui_font_bambu_semibold_24.c"
         "generated/ui_font_digits_64.c"
+        "generated/ui_font_clock_93.c"
         "generated/ui_icons.c"
         "generated/dotii_faces.c"
-        "generated/clock_digits.c"
+        "generated/clock_face.c"
     INCLUDE_DIRS "." "generated"
     REQUIRES
         esp_driver_usb_serial_jtag
