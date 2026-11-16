@@ -51,15 +51,14 @@ LV_FONT_DECLARE(ui_font_clock_93);
 #define IDLE_RETURN_HOME_MS 30000u
 /* 表情页空闲多久（外部状态一直没有变化）后换成时钟显示。 */
 #define IDLE_CLOCK_MS 60000u
+/* 时钟屏连续显示这么久之后，插播一次表情。 */
+#define CLOCK_FACE_PEEK_INTERVAL_MS 300000u
+/* 插播表情的时长，到点回到时钟，如此往复。 */
+#define CLOCK_FACE_PEEK_MS 20000u
 #define TITLE_HEIGHT 30
 #define DISPLAY_ANGLE_DEFAULT_TENTHS 840
 #define DISPLAY_ANGLE_MIN_TENTHS 800
 #define DISPLAY_ANGLE_MAX_TENTHS 1000
-
-/* 待机基础脸。原来固定为"呼吸"，现在换成更可爱的"微笑"：待机时在微笑与
-   眨眼之间切换，超过 60 秒无操作仍进入打哈欠。要回退只需把这里改成
-   DOTII_EXPRESSION_IDLE_BREATH，渲染分支都还在。 */
-#define DOTII_IDLE_BASE_EXPRESSION DOTII_EXPRESSION_FACE_SMILE
 
 static QueueHandle_t s_snapshot_queue;
 /* The UI reads this snapshot from task context; it is not a DMA buffer. */
@@ -92,6 +91,11 @@ static lv_obj_t *s_clock_time;
 static lv_obj_t *s_clock_date;
 static int s_clock_last_minute = -1;
 static uint32_t s_clock_seconds_zero;
+/* 时钟屏显示期间定时插播表情：正在插播时为 true，到点自动回时钟。
+   状态变化或新图到达会把这个标志清掉，插播循环就此结束。 */
+static bool s_clock_peeking;
+static uint32_t s_clock_shown_at;
+static uint32_t s_clock_peek_started;
 /* 最近一次"外部状态变化"（目前是 dotii 状态 token / 自定义内容版本）的时刻。
    换成 DeepSeek harness 数据源之后，这个信号由 harness 上报驱动。 */
 static uint32_t s_activity_signal_tick;
@@ -2214,6 +2218,14 @@ static bool dotii_idle_fallback_active(void)
     return s_snapshot.dotii_base_idle || !dotii_business_animation_active();
 }
 
+/* 只有"没在干活"的时候才允许切时钟：真正的空闲，或者压根没连上管理中心。
+   工作中 / 等待操作 / 已完成 / 失败都要留在表情页，让状态一直看得见。 */
+static bool dotii_clock_allowed(void)
+{
+    return s_snapshot.dotii_base_idle ||
+           s_snapshot.dotii_expression == DOTII_EXPRESSION_CONNECTING;
+}
+
 /* 位图表情直接显示烘焙好的画面，不参与几何图元渲染。 */
 static int dotii_face_index(dotii_expression_t expression)
 {
@@ -2234,7 +2246,9 @@ static dotii_expression_t active_dotii_expression(void)
     if (dotii_idle_fallback_active()) {
         if (lv_tick_elaps(s_last_activity) > 60000) return s_snapshot.dotii_long_idle_expression;
         if (dotii_blink_cycle_position() >= 6000U) return s_snapshot.dotii_blink_expression;
-        return DOTII_IDLE_BASE_EXPRESSION;
+        /* 待机基础脸完全由管理中心下发的分配决定（快照里的 dotii_expression，
+           对应后台「表情页」里给"空闲"挑的那个表情）。固件不再硬编码某一张脸。 */
+        return s_snapshot.dotii_expression;
     }
     return s_snapshot.dotii_expression;
 }
@@ -2600,6 +2614,9 @@ static void show_clock(void)
 {
     s_clock_seconds_zero = lv_tick_get();
     s_clock_last_minute = -1;
+    /* 每次进入时钟屏都重新计时：5 分钟后才插播下一次表情。 */
+    s_clock_shown_at = lv_tick_get();
+    s_clock_peeking = false;
     /* 立刻填一次时间，避免切进来先空一拍。 */
     clock_refresh();
     load_screen(s_clock, false);
@@ -2881,6 +2898,8 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         /* 外部状态变了 = 不再是"空闲"：重置 60 秒计时，并且把时钟切回表情。
            等 DeepSeek harness 接入后，喂进来的就是 harness 的活动信号。 */
         s_activity_signal_tick = lv_tick_get();
+        /* harness 状态有变，时钟插播循环立刻结束，让状态一直亮着。 */
+        s_clock_peeking = false;
         if (s_current == s_clock) load_screen(s_dotii, false);
     }
     s_snapshot = *snapshot;
@@ -3131,6 +3150,8 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
          snapshot->custom_animation_revision != s_custom_animation_revision_seen);
     if (s_custom_revision_seen_valid && new_custom_content && page_enabled(3)) {
         s_custom_autoshow = true;
+        /* 新图到达同样终止时钟插播循环，图片一直显示到用户点一下。 */
+        s_clock_peeking = false;
         s_activity_signal_tick = lv_tick_get();
         if (page_index_of_screen(s_current) >= 0) load_screen(s_custom, false);
     }
@@ -3193,10 +3214,29 @@ static void ui_timer(lv_timer_t *timer)
     }
     /* 新图自动跳出的状态，只在还停在自定义页时有效；用户自己滑走就算看过。 */
     if (s_custom_autoshow && s_current != s_custom) s_custom_autoshow = false;
-    /* 表情页空闲够久 → 换成时钟。状态一变由 update_snapshot 切回来。 */
-    if (s_current == s_dotii && s_screen_on && !s_screen_saver_active &&
+    /* 表情页空闲够久 → 换成时钟。状态一变由 update_snapshot 切回来。
+       只有空闲或连不上时才允许进时钟，干活期间屏幕留给状态表情。 */
+    if (s_current == s_dotii && s_screen_on && !s_screen_saver_active && !s_clock_peeking &&
+        dotii_clock_allowed() &&
         lv_tick_elaps(s_activity_signal_tick) >= IDLE_CLOCK_MS) {
         show_clock();
+    }
+    /* 时钟屏每看满 5 分钟，插播 20 秒表情，然后回到时钟，如此往复。
+       状态一变（update_snapshot）或新图到达（s_custom_autoshow）会清掉
+       s_clock_peeking，插播循环就此结束。 */
+    if (s_clock_peeking) {
+        if (s_current == s_dotii) {
+            if (lv_tick_elaps(s_clock_peek_started) >= CLOCK_FACE_PEEK_MS) show_clock();
+        } else {
+            /* 回到时钟或用户滑走：本轮插播结束，重新按 5 分钟起算。 */
+            s_clock_peeking = false;
+            s_clock_shown_at = lv_tick_get();
+        }
+    } else if (s_current == s_clock &&
+               lv_tick_elaps(s_clock_shown_at) >= CLOCK_FACE_PEEK_INTERVAL_MS) {
+        s_clock_peeking = true;
+        s_clock_peek_started = lv_tick_get();
+        load_screen(s_dotii, false);
     }
     if (s_current == s_clock) clock_refresh();
     /* 自动熄屏与自动深睡已关闭：这台设备当桌面常亮屏用。
