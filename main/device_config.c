@@ -36,7 +36,9 @@ esp_err_t device_config_init(void)
     if (error != ESP_OK) return error;
     load_string(handle, "ssid", s_config.wifi_ssid, sizeof(s_config.wifi_ssid));
     load_string(handle, "wifi_pass", s_config.wifi_password, sizeof(s_config.wifi_password));
-    load_string(handle, "bridge_url", s_config.bridge_url, sizeof(s_config.bridge_url));
+    /* 后台地址和 token 写死在固件里（构建时由 CI secrets 注入 CONFIG_STATE_DISPLAY_*）。
+       故意不读 NVS：设备里可能残留上一次配网写进去的本机 IP，读回来就会盖掉服务器地址，
+       表现就是"USB 一断就显示管理中心不可达"。WiFi 账号密码仍然走配网。 */
     load_string(handle, "bridge_tok", s_config.bridge_token, sizeof(s_config.bridge_token));
     uint8_t provisioned = 0;
     (void)nvs_get_u8(handle, "provisioned", &provisioned);

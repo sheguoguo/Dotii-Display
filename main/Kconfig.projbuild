@@ -16,7 +16,9 @@ menu "Dotii 桌面交互屏"
         string "Bridge snapshot URL"
         default ""
         help
-            Example: http://192.168.1.20:8787/api/v1/snapshot
+            Fixed at build time (CI injects it from repository secrets).
+            Example: http://192.168.1.20:8788/api/v1/snapshot
+            NVS provisioning no longer overrides this value.
 
     config STATE_DISPLAY_BRIDGE_TOKEN
         string "Bridge token"
