@@ -2533,7 +2533,7 @@ static void clock_refresh(void)
     if (minute_of_day != s_clock_last_minute) {
         s_clock_last_minute = minute_of_day;
         if (time_valid) {
-            static const char *const weekdays[] = {
+            const char *const weekdays[] = {
                 ui_tr("周日"), ui_tr("周一"), ui_tr("周二"), ui_tr("周三"),
                 ui_tr("周四"), ui_tr("周五"), ui_tr("周六"),
             };
