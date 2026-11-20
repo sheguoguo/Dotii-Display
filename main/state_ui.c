@@ -598,12 +598,17 @@ static bool s_reminder_visible;
 static uint32_t s_reminder_flash_ms;
 static bool s_reminder_flash_on;
 static uint32_t s_reminder_minutes = REMINDER_DEFAULT_MINUTES;
+/* 自动重复：确认提醒后自动开始下一轮，屏幕直接回表情页；下一轮照常在
+   久坐提醒页显示倒计时（可暂停/停止）。开关状态存 NVS，缺省打开。 */
+static bool s_reminder_auto_repeat = true;
+static void save_reminder_auto_repeat(void);
 
 /* 设置页控件：idle 状态显示开关 + 分钟调节 + 开始，running 状态显示倒计时。
    两套控件都常驻，靠显隐切换，避免运行时反复创建对象。 */
 static lv_obj_t *s_reminder_idle_box;
 static lv_obj_t *s_reminder_run_box;
 static lv_obj_t *s_reminder_switch;
+static lv_obj_t *s_reminder_auto_switch;
 static lv_obj_t *s_reminder_minutes_label;
 static lv_obj_t *s_reminder_countdown_minutes;
 static lv_obj_t *s_reminder_countdown_seconds;
@@ -725,6 +730,14 @@ static void reminder_switch_event(lv_event_t *event)
     else reminder_stop();
 }
 
+static void reminder_auto_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+    s_reminder_auto_repeat = lv_obj_has_state(s_reminder_auto_switch, LV_STATE_CHECKED);
+    save_reminder_auto_repeat();
+    reminder_render();
+}
+
 static void reminder_minutes_event(lv_event_t *event)
 {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED || s_reminder_running) return;
@@ -760,9 +773,12 @@ static void dismiss_reminder(void)
     if (!s_reminder_visible) return;
     s_reminder_visible = false;
     s_reminder_flash_on = false;
-    /* 确认后直接进入下一轮，省得用户再回设置页点一次开始。 */
-    reminder_start();
-    load_screen(first_enabled_screen(), false);
+    /* 自动重复打开：确认后立刻开始下一轮，省得每次回设置页点开始。
+       关闭：取消续跑，本轮到此结束，需要手动重开。 */
+    if (s_reminder_auto_repeat) reminder_start();
+    else reminder_stop();
+    /* 确认后一律直接回表情页，不在提醒界面停留。 */
+    load_screen(page_screen(0), false);
 }
 
 static void reminder_timer(lv_timer_t *timer)
@@ -916,6 +932,23 @@ static void build_reminder_setup(void)
     make_step_icon(plus, true);
     lv_obj_add_event_cb(plus, reminder_minutes_event, LV_EVENT_CLICKED,
                         (void *)(intptr_t)REMINDER_MINUTE_STEP);
+
+    /* 自动重复：打开后，点掉提醒即自动开始下一轮，且该轮不再占屏显示。 */
+    lv_obj_t *auto_row = lv_obj_create(s_reminder_idle_box);
+    lv_obj_remove_style_all(auto_row);
+    lv_obj_set_size(auto_row, LV_PCT(100), 58);
+    lv_obj_set_style_radius(auto_row, 18, 0);
+    lv_obj_set_style_bg_color(auto_row, color(COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(auto_row, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(auto_row, 18, 0);
+    lv_obj_remove_flag(auto_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *auto_text = make_label(auto_row, ui_tr("自动重复"), &ui_font_detail_20, COLOR_TEXT);
+    lv_obj_align(auto_text, LV_ALIGN_LEFT_MID, 0, 0);
+    s_reminder_auto_switch = lv_switch_create(auto_row);
+    lv_obj_set_size(s_reminder_auto_switch, 66, 36);
+    lv_obj_align(s_reminder_auto_switch, LV_ALIGN_RIGHT_MID, 0, 0);
+    if (s_reminder_auto_repeat) lv_obj_add_state(s_reminder_auto_switch, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(s_reminder_auto_switch, reminder_auto_event, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *start = lv_button_create(s_reminder_idle_box);
     lv_obj_set_size(start, 210, 58);
@@ -1087,6 +1120,11 @@ static void load_persisted_settings(void)
     if (nvs_get_u8(handle, "pg_custom", &page_visible) == ESP_OK) {
         s_page_custom_visible = page_visible != 0;
     }
+    /* 久坐提醒的"自动重复"开关：缺省打开，读到旧值才覆盖。 */
+    uint8_t auto_repeat = 1;
+    if (nvs_get_u8(handle, "rem_auto", &auto_repeat) == ESP_OK) {
+        s_reminder_auto_repeat = auto_repeat != 0;
+    }
     nvs_close(handle);
 }
 
@@ -1101,6 +1139,15 @@ static void save_page_visibility(void)
     if (codex_result == ESP_OK && reminder_result == ESP_OK && custom_result == ESP_OK) {
         nvs_commit(handle);
     }
+    nvs_close(handle);
+}
+
+/* 自动重复开关单独存，改动即时落盘（不依赖退出设置页）。 */
+static void save_reminder_auto_repeat(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open("display_ui", NVS_READWRITE, &handle) != ESP_OK) return;
+    if (nvs_set_u8(handle, "rem_auto", s_reminder_auto_repeat ? 1 : 0) == ESP_OK) nvs_commit(handle);
     nvs_close(handle);
 }
 
