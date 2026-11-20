@@ -202,5 +202,37 @@ class SnapshotOverlayTests(unittest.TestCase):
         self.assertFalse(validated["preview_data"])
 
 
+class OutOfOrderEventTests(unittest.TestCase):
+    """dsh-hooks 每个事件一个进程，落盘顺序不等于发生顺序。"""
+
+    def test_late_tool_call_does_not_revive_a_finished_turn(self):
+        state = initial_state()
+        state = apply_event(state, "turn/start",
+                            {"timestamp": "2026-11-16T04:50:00Z", "content": "干活"}, NOW)
+        state = apply_event(state, "turn/end",
+                            {"timestamp": "2026-11-16T04:50:09Z", "reason": "complete"}, NOW)
+        self.assertEqual(state["status"], "completed")
+
+        # 比 turn/end 早、但进程晚跑完的 tool/call 不能把状态改回 working
+        state = apply_event(state, "tool/call",
+                            {"timestamp": "2026-11-16T04:50:03Z", "tool": "bash"}, NOW)
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual(state["event"], "turn/end")
+
+    def test_newer_event_still_applies(self):
+        state = initial_state()
+        state = apply_event(state, "turn/end",
+                            {"timestamp": "2026-11-16T04:50:09Z", "reason": "complete"}, NOW)
+        state = apply_event(state, "turn/start",
+                            {"timestamp": "2026-11-16T04:51:00Z", "content": "下一轮"}, NOW)
+        self.assertEqual(state["status"], "working")
+
+    def test_missing_timestamp_falls_back_to_receive_time(self):
+        state = initial_state()
+        state = apply_event(state, "turn/start", {"content": "干活"}, NOW)
+        self.assertEqual(state["last_event_ts_ms"], NOW * 1000)
+        self.assertEqual(state["status"], "working")
+
+
 if __name__ == "__main__":
     unittest.main()

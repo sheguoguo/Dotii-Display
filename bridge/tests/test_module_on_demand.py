@@ -43,10 +43,11 @@ class ModuleOnDemandTests(unittest.TestCase):
 
             self.assertEqual(CodexCheckStore(path).read(), result)
 
-    def test_frontend_restores_saved_codex_check_from_overview(self):
+    def test_frontend_reads_live_harness_state_from_overview(self):
         script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("overview.codex_check", script)
+        self.assertIn("overview.harness", script)
+        self.assertIn("renderHarness", script)
 
     def test_management_only_packaging_can_reuse_the_formal_firmware_bundle(self):
         script = (BRIDGE.parent / "packaging" / "build_windows.ps1").read_text(encoding="utf-8")
@@ -121,16 +122,17 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertIn('"runtime_folder": writable_root,', backend)
         self.assertNotIn('"runtime_folder": runtime_folder,', backend)
 
-    def test_codex_check_copy_matches_requested_text(self):
+    def test_harness_panel_replaces_the_codex_check_copy(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
 
-        self.assertIn("检查本机 Codex CLI、App Server、登录账户、额度、用量和任务读取是否正常。", html)
+        self.assertIn("状态由 dsh-hooks 事件实时推送，不需要 Codex CLI，也不需要登录 OpenAI。", html)
+        self.assertNotIn("检查本机 Codex CLI、App Server、登录账户、额度、用量和任务读取是否正常。", html)
         self.assertNotIn("手动检查本机 Codex CLI", html)
 
-    def test_first_run_defaults_keep_codex_and_bambu_off(self):
+    def test_first_run_defaults_enable_harness_and_keep_bambu_off(self):
         self.assertEqual(
             validate_module_config(None),
-            {"codex": False, "bambu": False, "dotii": True},
+            {"codex": True, "bambu": False, "dotii": True},
         )
 
     def test_first_run_defaults_enable_custom_and_dotii_pages(self):
@@ -316,9 +318,11 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertNotIn("install-dependency", html + script)
         self.assertNotIn("reinstall-dependency", html + script)
         self.assertNotIn("/api/v1/admin/codex/detect", backend)
-        self.assertIn("Codex 运行检测", html)
-        self.assertIn("/api/v1/admin/codex/check", backend)
-        self.assertIn("/api/v1/admin/codex/check", script)
+        self.assertNotIn("Codex 运行检测", html)
+        self.assertNotIn("/api/v1/admin/codex/check", script)
+        self.assertIn("Harness 数据链路", html)
+        self.assertIn("/api/v1/admin/harness/state", backend)
+        self.assertIn("overview.harness", script)
         self.assertNotIn("/api/v1/admin/dependencies/install", backend)
         self.assertNotIn("/api/v1/admin/bambu/ffmpeg/install", backend)
         self.assertIn("保存并连接", html)

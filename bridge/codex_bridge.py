@@ -88,7 +88,9 @@ CUSTOM_DEFAULTS = {
     "ring_start": "#F2C66D",
     "ring_end": "#5DA9FF",
 }
-MODULE_DEFAULTS = {"codex": False, "bambu": False, "dotii": True}
+# Harness 是默认数据源（dsh-hooks 推送），首次运行就打开，否则管理台那块面板
+# 会被"模块未启用"的规则整块隐藏，看起来像没数据。Bambu 仍然默认关闭。
+MODULE_DEFAULTS = {"codex": True, "bambu": False, "dotii": True}
 
 
 def resolve_ffmpeg(runtime_folder: Path) -> str | None:
@@ -1064,6 +1066,20 @@ class CustomAssetStore:
                 self.animation_path.unlink()
             return self.animation_info()
 
+    def backup_animation(self) -> bool:
+        """把当前动画改名成 .bak 挪开，返回是否真的移走了文件。
+
+        设备端播放优先级是 动画 > 整屏静态帧 > 本地文字布局，只要动画还在，
+        新提交的文字/图片整屏帧就会被完全盖住。所以保存静态画面时要主动让位，
+        原件保留成 .bak，需要时还能换回来。
+        """
+        with self.lock:
+            if not self.animation_path.is_file():
+                return False
+            backup_path = self.animation_path.with_name(self.animation_path.name + ".bak")
+            os.replace(self.animation_path, backup_path)
+            return True
+
 
 class ModuleConfigStore:
     def __init__(self, path: Path) -> None:
@@ -1371,6 +1387,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 **runtime,
             },
             "snapshot": snapshot,
+            "harness": self.bridge.dsh_hook.read() if self.bridge.dsh_hook is not None else None,
             "codex_check": self.bridge.codex_check.read(),
             "dotii_config": self.bridge.dotii.read(),
             "display_config": self.bridge.display.read(),
@@ -1711,13 +1728,23 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     raise ValueError("至少保留一个启用页面")
                 payload["revision"] = current["revision"] + 1
                 render_token = payload.pop("render_token", None)
+                keep_animation = bool(payload.pop("keep_animation", False))
                 validated = validate_custom_config(payload)
+                animation_removed = False
                 if render_token is not None:
                     self.bridge.assets.commit_render(render_token)
+                    # 提交了新的整屏帧（文字/图片都烧在里面）：设备端动画优先级更高，
+                    # 不动画就会一直盖住新画面，所以这里自动把动画挪成 .bak。
+                    if not keep_animation:
+                        animation_removed = self.bridge.assets.backup_animation()
                 custom = self.bridge.custom.write(validated)
                 custom.update(self.bridge.assets.source_info())
                 custom.update(self.bridge.assets.render_info())
-                self._send_json(HTTPStatus.OK, {"ok": True, "custom": custom})
+                custom.update(self.bridge.assets.animation_info())
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "custom": custom, "animation_removed": animation_removed},
+                )
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -1894,8 +1921,9 @@ def main() -> None:
     parser.add_argument("--app-server", action="store_true", help="read account and task state through Codex app-server")
     parser.add_argument("--codex-command", help="path to a standalone Codex CLI executable or codex.js")
     parser.add_argument("--app-server-interval", type=float, default=2.0)
-    parser.add_argument("--source", choices=("codex", "dsh"), default="codex",
-                        help="数据源：codex=本机 Codex app-server；dsh=DeepSeek Harness 会话日志")
+    parser.add_argument("--source", choices=("hook", "dsh", "codex"), default="hook",
+                        help="数据源：hook=dsh-hooks 事件推送（默认）；"
+                             "dsh=DeepSeek Harness 会话日志；codex=本机 Codex app-server")
     parser.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh",
                         help="DSH 数据目录（--source dsh 时使用）")
     parser.add_argument("--allow-admin-cidr", default="",
@@ -1992,7 +2020,8 @@ def main() -> None:
             daemon=True,
         ).start()
     else:
-        runtime.report("disabled", "自动数据源未启用")
+        # hook 模式：不跑任何轮询采集器，状态完全由 dsh-hooks 推事件维护。
+        runtime.report("online", "由 dsh-hooks 事件推送")
 
     address = local_ipv4()
     logging.info("Dotii 管理中心：http://127.0.0.1:%s", arguments.port)

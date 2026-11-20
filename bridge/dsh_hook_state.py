@@ -17,6 +17,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,7 @@ def initial_state() -> dict[str, Any]:
         "turn_started_epoch": 0,
         "finished_at_epoch": 0,
         "duration_seconds": 0,
+        "last_event_ts_ms": 0,
     }
 
 
@@ -124,13 +126,33 @@ def _validate_state(payload: Any) -> dict[str, Any]:
     if state["status"] not in {"idle", "working", "waiting_user", "completed", "failed"}:
         state["status"] = "idle"
     for key in ("updated_at_epoch", "user_message_count", "token_count",
-                "turn_started_epoch", "finished_at_epoch", "duration_seconds"):
+                "turn_started_epoch", "finished_at_epoch", "duration_seconds",
+                "last_event_ts_ms"):
         state[key] = _int(state[key])
     for key in ("event", "title", "thread_id", "turn_id", "last_user_message",
                 "last_assistant_message", "current_action"):
         state[key] = _text(state[key])
     state["title"] = state["title"] or DEFAULT_TITLE
     return state
+
+
+def _event_ts_ms(raw: Any, fallback_seconds: int) -> int:
+    """把 hook 带过来的时间戳统一成毫秒。认 ISO 串、秒、毫秒三种。"""
+    if raw is None or raw == "":
+        return fallback_seconds * 1000
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        value = float(raw)
+    else:
+        text = str(raw).strip()
+        try:
+            value = float(text)
+        except ValueError:
+            try:
+                moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return fallback_seconds * 1000
+            return int(moment.timestamp() * 1000)
+    return int(value) if value >= 1e11 else int(value * 1000)
 
 
 def apply_event(
@@ -144,6 +166,15 @@ def apply_event(
     nxt = dict(state)
     ctx = context if isinstance(context, dict) else {}
     name = _text(event)
+
+    # dsh-hooks 每个事件都是一个独立进程，并发跑完的先后顺序不等于发生顺序：
+    # 实测过 tool/call 比 turn/end 晚落盘，把"已完成"覆盖成"工作中"。
+    # 所以按事件自带时间戳做单调过滤，比上一次旧的事件直接丢掉。
+    event_ts = _event_ts_ms(ctx.get("timestamp"), now)
+    last_ts = _int(state.get("last_event_ts_ms"))
+    if last_ts > 0 and event_ts < last_ts:
+        return dict(state)
+    nxt["last_event_ts_ms"] = max(event_ts, last_ts)
 
     nxt["updated_at_epoch"] = now
     nxt["event"] = name

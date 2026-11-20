@@ -31,7 +31,10 @@ def tray_text(text: str) -> str:
 
 APP_NAME = "Dotii 管理中心"
 MUTEX_NAME = "Local\\StateDisplayBridgeApp"
-DASHBOARD_URL = "http://127.0.0.1:8787"
+# 8787 经常被别的开发工具占着（本机是 codebuddy-gateway），默认用 8788，
+# 需要时用 DOTII_BRIDGE_PORT 覆盖。子进程必须和这个端口一致。
+DASHBOARD_PORT = int(os.environ.get("DOTII_BRIDGE_PORT") or 8788)
+DASHBOARD_URL = f"http://127.0.0.1:{DASHBOARD_PORT}"
 ADMIN_URL = f"{DASHBOARD_URL}/api/v1/admin/overview"
 STARTUP_DELAY_SECONDS = 8.0
 STARTUP_READY_TIMEOUT_SECONDS = 45.0
@@ -484,10 +487,11 @@ def main() -> int:
                 0x10,
             )
             return 1
-        command = [str(bridge_executable), "--app-server"]
+        command = [str(bridge_executable), "--port", str(DASHBOARD_PORT)]
         working_root = application_root()
     else:
-        command = [sys.executable, "-B", str(script), "--app-server", "--development"]
+        # 默认 --source hook：状态由 dsh-hooks 事件推送，不再启动 Codex app-server 采集。
+        command = [sys.executable, "-B", str(script), "--port", str(DASHBOARD_PORT), "--development"]
         working_root = script.parent.parent
     process = subprocess.Popen(
         command,

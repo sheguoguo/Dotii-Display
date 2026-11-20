@@ -32,7 +32,7 @@
     <nav class="module-nav" aria-label="模块" data-i18n-attrs="{&quot;aria-label&quot;: &quot;模块&quot;}">
       <button class="module-tab active" type="button" data-panel="codex" aria-selected="true">
         <span class="nav-icon codex-icon" aria-hidden="true"></span>
-        <span>Codex</span>
+        <span>Harness</span>
         <span class="module-meta" id="codex-nav-state"><span data-i18n="读取中">读取中</span></span>
       </button>
       <button class="module-tab" type="button" data-panel="bambu" aria-selected="false">
@@ -60,8 +60,8 @@
       <section class="panel active" id="panel-codex" aria-labelledby="codex-heading">
         <div class="section-heading">
           <div>
-            <h2 id="codex-heading">Codex</h2>
-            <p><span data-i18n="查看额度和当前任务的最新状态。">查看额度和当前任务的最新状态。</span></p>
+            <h2 id="codex-heading">DeepSeek Harness</h2>
+            <p><span data-i18n="查看 Harness 会话状态、助手回复和积分余额。">查看 Harness 会话状态、助手回复和积分余额。</span></p>
           </div>
         </div>
 
@@ -69,25 +69,15 @@
         <div class="codex-overview" id="codex-overview">
           <article class="usage-panel" id="usage-panel">
             <div class="quota-overview">
-              <div class="quota-item quota-five-hour" id="five-hour-quota" hidden>
-                <div class="usage-ring usage-ring-five-hour" id="five-hour-ring">
-                  <div class="usage-ring-inner">
-                    <span><span data-i18n="5 小时剩余">5 小时剩余</span></span>
-                    <strong id="five-hour-value">--</strong>
-                    <small id="five-hour-plan"><span data-i18n="仅 Plus">仅 Plus</span></small>
-                  </div>
-                </div>
-                <p class="quota-reset"><span><span data-i18n="重置时间">重置时间</span></span><strong id="five-hour-reset-date">--</strong></p>
-              </div>
               <div class="quota-item quota-weekly">
                 <div class="usage-ring" id="usage-ring">
                   <div class="usage-ring-inner">
-                    <span><span data-i18n="周剩余">周剩余</span></span>
+                    <span><span data-i18n="积分剩余">积分剩余</span></span>
                     <strong id="weekly-value">--</strong>
-                    <small id="weekly-plan"><span data-i18n="正在读取">正在读取</span></small>
+                    <small id="weekly-plan"><span data-i18n="WorkBuddy">WorkBuddy</span></small>
                   </div>
                 </div>
-                <p class="quota-reset" id="weekly-reset-inline" hidden><span><span data-i18n="重置时间">重置时间</span></span><strong id="weekly-reset-inline-value">--</strong></p>
+                <p class="quota-reset" id="weekly-reset-inline" hidden><span><span data-i18n="最近到期">最近到期</span></span><strong id="weekly-reset-inline-value">--</strong></p>
               </div>
             </div>
             <div class="usage-caption">
@@ -96,19 +86,20 @@
             </div>
           </article>
 
-          <div class="metric-grid" aria-label="Codex 概览" data-i18n-attrs="{&quot;aria-label&quot;: &quot;Codex 概览&quot;}">
+          <div class="metric-grid" aria-label="Harness 概览" data-i18n-attrs="{&quot;aria-label&quot;: &quot;Harness 概览&quot;}">
             <article class="metric primary-metric" id="metric-task">
               <span><span data-i18n="任务状态">任务状态</span></span>
               <strong id="task-status"><span data-i18n="正在读取">正在读取</span></strong>
             </article>
             <article class="metric" id="metric-token">
-              <span><span data-i18n="近 7 日 Token">近 7 日 Token</span></span>
+              <span><span data-i18n="本回合 Token">本回合 Token</span></span>
               <strong id="weekly-tokens">--</strong>
-              <small id="weekly-token-period"><span data-i18n="等待用量统计">等待用量统计</span></small>
+              <small id="weekly-token-period"><span data-i18n="回合结束后统计">回合结束后统计</span></small>
             </article>
-            <article class="metric" id="metric-reset">
-              <span><span data-i18n="额度重置">额度重置</span></span>
-              <strong id="reset-date">--</strong>
+            <article class="metric" id="metric-event">
+              <span><span data-i18n="最后事件">最后事件</span></span>
+              <strong id="harness-last-event">--</strong>
+              <small id="harness-last-time"><span data-i18n="尚未收到事件">尚未收到事件</span></small>
             </article>
             <article class="metric" id="metric-message">
               <span><span data-i18n="我的消息">我的消息</span></span>
@@ -117,8 +108,6 @@
             </article>
           </div>
         </div>
-
-        <div class="task-switcher" id="codex-task-switcher" aria-label="正在进行的任务" hidden data-i18n-attrs="{&quot;aria-label&quot;: &quot;正在进行的任务&quot;}"></div>
 
         <article class="task-panel">
           <div class="task-title-row">
@@ -134,7 +123,7 @@
               <div class="markdown-body" id="last-user-message"><span data-i18n="暂无内容">暂无内容</span></div>
             </div>
             <div class="message-block assistant-message">
-              <span id="codex-message-heading"><span data-i18n="Codex 中间消息">Codex 中间消息</span></span>
+              <span id="codex-message-heading"><span data-i18n="助手回复">助手回复</span></span>
               <div class="markdown-body" id="codex-message-stream"><span data-i18n="暂无内容">暂无内容</span></div>
             </div>
           </div>
@@ -144,59 +133,30 @@
 
         <section class="module-preferences codex-preferences" aria-labelledby="codex-preferences-heading">
           <div class="module-preferences-heading">
-            <div><h3 id="codex-preferences-heading"><span data-i18n="Codex 设置">Codex 设置</span></h3><p><span data-i18n="管理 Dotii 上的 Codex 页面和电脑端数据连接。">管理 Dotii 上的 Codex 页面和电脑端数据连接。</span></p></div>
+            <div><h3 id="codex-preferences-heading"><span data-i18n="Harness 设置">Harness 设置</span></h3><p><span data-i18n="管理 Dotii 上的 Harness 页面和电脑端数据连接。">管理 Dotii 上的 Harness 页面和电脑端数据连接。</span></p></div>
             <label class="module-switch">
               <span><span data-i18n="启用功能">启用功能</span></span>
               <input id="codex-enabled" type="checkbox">
               <span class="switch-track" aria-hidden="true"></span>
             </label>
           </div>
-          <article class="dependency-panel module-preference-card codex-ui-panel">
+          <article class="dependency-panel module-preference-card" id="harness-health-panel">
             <div class="dependency-heading">
               <div>
-                <h3><span data-i18n="Codex 页面样式">Codex 页面样式</span></h3>
-                <p><span data-i18n="选择 Dotii 和 Dotii 管理中心中显示的剩余额度。">选择 Dotii 和 Dotii 管理中心中显示的剩余额度。</span></p>
+                <h3><span data-i18n="Harness 数据链路">Harness 数据链路</span></h3>
+                <p><span data-i18n="状态由 dsh-hooks 事件实时推送，不需要 Codex CLI，也不需要登录 OpenAI。">状态由 dsh-hooks 事件实时推送，不需要 Codex CLI，也不需要登录 OpenAI。</span></p>
               </div>
-              <span class="subscription-badge"><span data-i18n="仅 Plus 订阅有 5 小时限额">仅 Plus 订阅有 5 小时限额</span></span>
+              <span class="dependency-badge" id="harness-badge" data-state="idle"><span data-i18n="尚未收到事件">尚未收到事件</span></span>
             </div>
-            <div class="codex-ui-setting">
-              <span class="time-field-label" id="codex-ui-label"><span data-i18n="Dotii 主页面">Dotii 主页面</span></span>
-              <div class="ui-select" data-ui-select="codex-ui">
-                <input id="codex-ui" type="hidden" value="classic">
-                <button class="ui-select-trigger" id="codex-ui-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="codex-ui-label codex-ui-value">
-                  <span id="codex-ui-value"><span data-i18n="仅显示周剩余">仅显示周剩余</span></span><span class="ui-select-chevron" aria-hidden="true"></span>
-                </button>
-                <div class="ui-select-menu" role="listbox" aria-labelledby="codex-ui-label" hidden>
-                  <button type="button" role="option" data-value="classic"><span data-i18n="仅显示周剩余">仅显示周剩余</span></button>
-                  <button type="button" role="option" data-value="dual_limit"><span data-i18n="显示 5 小时及周剩余">显示 5 小时及周剩余</span></button>
-                </div>
-              </div>
-              <small id="codex-ui-state" role="status" aria-live="polite"><span data-i18n="仅显示周剩余额度">仅显示周剩余额度</span></small>
+            <div class="dependency-details">
+              <div><span><span data-i18n="会话标题">会话标题</span></span><strong id="harness-title">--</strong></div>
+              <div><span><span data-i18n="会话 ID">会话 ID</span></span><strong id="harness-session">--</strong></div>
+              <div><span><span data-i18n="回合">回合</span></span><strong id="harness-turn">--</strong></div>
+              <div><span><span data-i18n="最后事件">最后事件</span></span><strong id="harness-event">--</strong></div>
+              <div><span><span data-i18n="事件时间">事件时间</span></span><strong id="harness-event-time-value">--</strong></div>
+              <div><span><span data-i18n="后台采集器">后台采集器</span></span><strong id="harness-collector">--</strong></div>
             </div>
-          </article>
-          <article class="dependency-panel module-preference-card codex-health-panel" id="codex-health-panel">
-            <div class="dependency-heading">
-              <div>
-                <h3><span data-i18n="Codex 运行检测">Codex 运行检测</span></h3>
-                <p><span data-i18n="检查本机 Codex CLI、App Server、登录账户、额度、用量和任务读取是否正常。">检查本机 Codex CLI、App Server、登录账户、额度、用量和任务读取是否正常。</span></p>
-              </div>
-              <span class="dependency-badge" id="codex-check-badge" data-state="idle"><span data-i18n="尚未检测">尚未检测</span></span>
-            </div>
-            <div class="dependency-details codex-check-details">
-              <div><span>Codex CLI</span><strong id="codex-check-cli">--</strong></div>
-              <div><span><span data-i18n="运行来源">运行来源</span></span><strong id="codex-check-source">--</strong></div>
-              <div><span>App Server</span><strong id="codex-check-server">--</strong></div>
-              <div><span><span data-i18n="后台采集器">后台采集器</span></span><strong id="codex-check-collector">--</strong></div>
-              <div><span><span data-i18n="ChatGPT 账户">ChatGPT 账户</span></span><strong id="codex-check-account">--</strong></div>
-              <div><span><span data-i18n="订阅类型">订阅类型</span></span><strong id="codex-check-plan">--</strong></div>
-              <div><span><span data-i18n="额度与用量">额度与用量</span></span><strong id="codex-check-usage">--</strong></div>
-              <div><span><span data-i18n="任务列表">任务列表</span></span><strong id="codex-check-threads">--</strong></div>
-            </div>
-            <p class="dependency-status" id="codex-check-detail" role="status" aria-live="polite"><span data-i18n="启用 Codex 后可运行只读检测。">启用 Codex 后可运行只读检测。</span></p>
-            <div class="dependency-actions codex-check-actions">
-              <button class="primary-button" id="codex-check" type="button"><span data-i18n="开始检测">开始检测</span></button>
-              <time id="codex-check-time"><span data-i18n="尚未检测">尚未检测</span></time>
-            </div>
+            <p class="dependency-status" id="harness-detail" role="status" aria-live="polite"><span data-i18n="在 DSH 里发起一次对话后，这里会显示实时状态。">在 DSH 里发起一次对话后，这里会显示实时状态。</span></p>
           </article>
         </section>
       </section>

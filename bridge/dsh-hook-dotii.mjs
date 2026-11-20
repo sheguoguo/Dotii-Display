@@ -121,6 +121,9 @@ async function main() {
   if (!event) return 0;
 
   const context = buildContext(overrides);
+  // dsh-hooks 每个事件都是独立进程，落盘顺序不保证等于发生顺序。
+  // 带上毫秒时间戳，Python 侧据此丢掉晚到的旧事件。
+  if (!context.timestamp) context.timestamp = Date.now();
   const payload = { event, context };
   const port = Number(overrides.port || ENV.DOTII_BRIDGE_PORT || DEFAULTS.port);
   const timeoutMs = Number(overrides.timeoutMs || DEFAULTS.timeoutMs);

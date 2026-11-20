@@ -27,8 +27,6 @@ const state = {
   displayDirty: false,
   displaySaving: false,
   codexUiSaving: false,
-  codexChecking: false,
-  codexCheck: null,
   firmwarePortsSignature: "",
   bluetoothDevicesSignature: "",
   selectedCodexTaskId: "",
@@ -82,6 +80,8 @@ const STATUS_TEXT = window.DotiiI18n.localize({
 });
 
 const DISPLAY_TIMEOUT_OPTIONS = [10, 30, 60, 180, 300, 600, 1800, 0];
+// dsh-hooks 超过这个时长没再推事件，就认为链路没在用了（DSH 关闭或没人干活）。
+const HARNESS_STALE_SECONDS = 900;
 const DISPLAY_TIMEOUT_PAIRS = [
   { screenOff: "screen-off-timeout", sleep: "sleep-timeout" },
   { screenOff: "charging-screen-off-timeout", sleep: "charging-sleep-timeout" },
@@ -1009,43 +1009,22 @@ function renderCodexTask(task) {
   const messages = Array.isArray(task.codex_messages) ? task.codex_messages.filter(Boolean) : [];
   const visibleMessages = task.conversation_mode === "progress" ? messages : messages.slice(-1);
   const conversationHeading = {
-    progress: t("Codex 中间消息"),
-    history: t("Codex 最终回复"),
-    final: t("Codex 最终回复"),
-  }[task.conversation_mode] || t("Codex 消息");
+    progress: t("当前动作"),
+    history: t("助手回复"),
+    final: t("助手回复"),
+  }[task.conversation_mode] || t("助手回复");
   setText("codex-message-heading", conversationHeading);
   setMarkdownMessages(
     "codex-message-stream",
     visibleMessages.length ? visibleMessages : [
-      task.conversation_mode === "progress" ? t("暂无中间消息") : (task.last_assistant_message || t("暂无最终回复")),
+      task.conversation_mode === "progress" ? t("暂无中间消息") : (task.last_assistant_message || t("暂无回复")),
     ],
   );
-}
-
-function renderCodexTaskSwitcher(tasks) {
-  const switcher = byId("codex-task-switcher");
-  switcher.hidden = tasks.length <= 1;
-  switcher.replaceChildren();
-  if (tasks.length <= 1) return;
-  tasks.forEach((task, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = tr`任务${[t("一"), t("二"), t("三"), t("四"), t("五"), t("六")][index] || index + 1}`;
-    button.title = task.title || button.textContent;
-    button.classList.toggle("active", task.thread_id === state.selectedCodexTaskId);
-    button.addEventListener("click", () => {
-      state.selectedCodexTaskId = task.thread_id || `task-${index}`;
-      renderCodexTask(task);
-      renderCodexTaskSwitcher(tasks);
-    });
-    switcher.append(button);
-  });
 }
 
 function renderOverview(overview) {
   state.overview = overview;
   renderConnection(overview);
-  if (!state.codexChecking && overview.codex_check) state.codexCheck = overview.codex_check;
   const snapshot = overview.snapshot || {};
   const codex = snapshot.codex || {};
   const tasks = Array.isArray(codex.tasks) && codex.tasks.length ? codex.tasks : [codex.task || {}];
@@ -1061,36 +1040,30 @@ function renderOverview(overview) {
   const dotiiEnabled = modules.dotii?.enabled !== false;
   const weeklyAvailable = codex.weekly_available !== false;
   const weekly = weeklyAvailable ? Math.max(0, Math.min(100, Number(codex.weekly_remaining_percent) || 0)) : 0;
-  const fiveHourAvailable = codex.five_hour_available === true;
-  const fiveHour = fiveHourAvailable ? Math.max(0, Math.min(100, Number(codex.five_hour_remaining_percent) || 0)) : 0;
+  const harness = overview.harness || null;
 
   setBridgeState(bridge);
   renderBluetooth(overview.bluetooth || {});
   renderFirmware(overview.firmware || {});
   renderProvisionMethod();
   byId("usage-ring").style.setProperty("--progress", `${weekly * 3.6}deg`);
-  byId("five-hour-ring").style.setProperty("--progress", `${fiveHour * 3.6}deg`);
   setText("weekly-value", weeklyAvailable ? `${weekly}%` : "--");
-  setText("five-hour-value", fiveHourAvailable ? `${fiveHour}%` : "--");
-  setText("five-hour-plan", fiveHourAvailable ? t("Plus 计划") : t("仅 Plus"));
-  setText("five-hour-reset-date", fiveHourAvailable ? (codex.five_hour_reset_date || "--") : "--");
+  byId("weekly-reset-inline").hidden = false;
   setText("weekly-reset-inline-value", codex.reset_date || "--");
-  setText("weekly-plan", codex.plan_type ? tr`${codex.plan_type} 计划` : t("计划类型未知"));
+  setText("weekly-plan", t("WorkBuddy"));
   setText("snapshot-source", snapshot.preview_data ? t("示例内容") : bridge.collector_state === "online" ? t("已连接") : t("等待连接"));
   setText("snapshot-time", formatTime(snapshot.generated_at_epoch));
-  setText("weekly-tokens", formatNumber(codex.weekly_tokens, codex.weekly_tokens_available !== false));
-  setText("weekly-token-period", codex.weekly_tokens_available !== false && codex.weekly_tokens_as_of
-    ? tr`统计截至 ${codex.weekly_tokens_as_of}`
-    : t("等待用量统计"));
-  setText("reset-date", codex.reset_date || "--");
+  setText("weekly-tokens", formatNumber(task.token_count, task.token_count_available !== false));
+  setText("weekly-token-period", task.token_count_available !== false && Number(task.token_count) > 0
+    ? t("本回合用量")
+    : t("回合结束后统计"));
   renderCodexTask(task);
-  renderCodexTaskSwitcher(tasks);
   if (!state.moduleSaving.codex) byId("codex-enabled").checked = codexEnabled;
   if (!state.moduleSaving.bambu) byId("bambu-enabled").checked = bambuEnabled;
   byId("codex-content").hidden = !codexEnabled;
-  renderCodexCheck(state.codexCheck, codexEnabled, bridge);
+  renderHarness(harness, codexEnabled, bridge, task);
   byId("bambu-content").hidden = !bambuEnabled;
-  setText("codex-nav-state", codexEnabled ? (bridge.collector_state === "online" ? t("在线") : bridge.collector_state === "error" ? t("异常") : t("连接中")) : t("已关闭"));
+  setText("codex-nav-state", codexEnabled ? (harness && Number(harness.updated_at_epoch) > 0 ? t("在线") : t("连接中")) : t("已关闭"));
   renderBambu(snapshot.bambu || {}, overview.bambu_config || {}, bambuEnabled);
   const incomingDotiiConfig = overview.dotii_config;
   if (!state.dotiiConfigDirty && !state.dotiiConfigSaving && incomingDotiiConfig
@@ -1102,17 +1075,6 @@ function renderOverview(overview) {
   }
   renderDotii(snapshot.dotii || {}, dotiiEnabled);
   const displayConfig = overview.display_config || snapshot.display || {};
-  const codexUi = displayConfig.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-  byId("codex-overview").classList.toggle("dual-limit", codexUi === "dual_limit");
-  byId("usage-panel").classList.toggle("dual-limit", codexUi === "dual_limit");
-  byId("five-hour-quota").hidden = codexUi !== "dual_limit";
-  byId("weekly-reset-inline").hidden = codexUi !== "dual_limit";
-  if (!state.codexUiSaving) {
-    setUiSelectValue("codex-ui", codexUi);
-    setText("codex-ui-state", codexUi === "dual_limit"
-      ? t("同时显示 5 小时和周剩余额度")
-      : t("仅显示周剩余额度"));
-  }
   if (!state.displayDirty && !state.displaySaving) {
     const angle = Math.max(80, Math.min(100, Number(displayConfig.docked_rotation_tenths || 840) / 10));
     const screenOffTimeout = DISPLAY_TIMEOUT_OPTIONS.includes(Number(displayConfig.screen_off_timeout_seconds))
@@ -1149,69 +1111,44 @@ function collectorText(collector = {}) {
   return labels[collector.collector_state] || t("等待连接");
 }
 
-function renderCodexCheck(result, enabled = true, liveBridge = {}) {
-  const button = byId("codex-check");
-  button.disabled = !enabled || state.codexChecking;
-  const badge = byId("codex-check-badge");
-  if (state.codexChecking) {
-    badge.dataset.state = "running";
-    badge.textContent = t("检测中");
-    setText("codex-check-detail", t("正在通过本机 App Server 读取 Codex 状态…"));
-    setText("codex-check-collector", collectorText(liveBridge));
-    return;
-  }
-  if (!result) {
+function renderHarness(harness, enabled = true, bridge = {}, task = {}) {
+  const badge = byId("harness-badge");
+  const updated = Number(harness?.updated_at_epoch) || 0;
+  // 服务器上的部署没有 dsh-hooks 推送，状态来自会话日志轮询（--source dsh）。
+  // 这种情况不要显示"尚未收到事件"，否则看起来像坏了。
+  const polled = Number(task?.last_updated_epoch) || 0;
+  const age = updated ? Math.max(0, Math.floor(Date.now() / 1000) - updated) : 0;
+  if (!enabled) {
     badge.dataset.state = "idle";
-    badge.textContent = t("尚未检测");
-    setText("codex-check-detail", enabled ? t("点击“开始检测”验证当前 Codex 数据链路。") : t("启用 Codex 后可运行只读检测。"));
-    setText("codex-check-collector", collectorText(liveBridge));
-    return;
+    badge.textContent = t("已关闭");
+    setText("harness-detail", t("Harness 模块已关闭，设备不会显示会话状态。"));
+  } else if (!updated && polled) {
+    badge.dataset.state = "ready";
+    badge.textContent = t("轮询采集");
+    setText("harness-detail", [t("状态来自会话日志轮询"), formatTime(polled)].join(" · "));
+  } else if (!updated) {
+    badge.dataset.state = "idle";
+    badge.textContent = t("尚未收到事件");
+    setText("harness-detail", t("在 DSH 里发起一次对话后，这里会显示实时状态。"));
+  } else if (age > HARNESS_STALE_SECONDS) {
+    badge.dataset.state = "error";
+    badge.textContent = t("事件已过期");
+    setText("harness-detail", [t("最后事件"), formatTime(updated), t("之后没有新事件")].join(" · "));
+  } else {
+    badge.dataset.state = "ready";
+    badge.textContent = t("实时");
+    setText("harness-detail", [t("推送正常"), harness.event || "--", formatTime(updated)].join(" · "));
   }
-  const cli = result.cli || {};
-  const appServer = result.app_server || {};
-  const account = result.account || {};
-  const checks = result.checks || {};
-  const collector = result.collector || liveBridge;
-  badge.dataset.state = result.ok ? "ready" : "error";
-  badge.textContent = result.ok ? t("运行正常") : account.logged_in ? t("部分异常") : t("需要处理");
-  setText("codex-check-cli", cli.available ? (cli.version && cli.version !== "--" ? `v${cli.version}` : t("可用")) : t("不可用"));
-  setText("codex-check-source", t(cli.source) || "--");
-  setText("codex-check-server", checkText(appServer.available));
-  setText("codex-check-collector", collectorText(collector));
-  setText("codex-check-account", account.logged_in ? (account.email || t("已登录")) : t("未登录"));
-  setText("codex-check-plan", account.plan_type ? account.plan_type.toUpperCase() : "--");
-  setText("codex-check-usage", account.logged_in ? tr`额度${checkText(checks.rate_limits)} · 用量${checkText(checks.usage)}` : "--");
-  setText("codex-check-threads", checks.threads ? tr`正常 · ${Number(result.thread_count) || 0} 个` : t("异常"));
-  setText("codex-check-detail", t(result.detail) || (result.ok ? t("Codex 功能运行正常。") : t("Codex 功能检测异常。")));
-  setText("codex-check-time", result.checked_at_epoch ? tr`检测于 ${formatTime(result.checked_at_epoch)}` : t("尚未检测"));
-}
-
-async function checkCodex() {
-  if (state.codexChecking) return;
-  state.codexChecking = true;
-  renderCodexCheck(state.codexCheck, true, state.overview?.bridge || {});
-  try {
-    const response = await fetch("/api/v1/admin/codex/check", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || t("Codex 检测失败"));
-    state.codexCheck = result;
-    showToast(result.ok ? t("Codex 功能运行正常") : (t(result.detail) || t("Codex 检测发现异常")));
-  } catch (error) {
-    state.codexCheck = {
-      ok: false,
-      checked_at_epoch: Math.floor(Date.now() / 1000),
-      detail: error.message || t("Codex 检测失败"),
-      collector: state.overview?.bridge || {},
-    };
-    showToast(state.codexCheck.detail);
-  } finally {
-    state.codexChecking = false;
-    renderCodexCheck(state.codexCheck, byId("codex-enabled").checked, state.overview?.bridge || {});
-  }
+  const session = harness?.thread_id || task?.thread_id || "";
+  const turn = harness?.turn_id || task?.turn_id || "";
+  setText("harness-title", harness?.title || task?.title || "--");
+  setText("harness-session", session || "--");
+  setText("harness-turn", turn || "--");
+  setText("harness-event", harness?.event || (updated ? "--" : (polled ? t("轮询采集") : "--")));
+  setText("harness-event-time-value", updated ? formatTime(updated) : (polled ? formatTime(polled) : "--"));
+  setText("harness-collector", collectorText(bridge));
+  setText("harness-last-event", harness?.event || (polled ? t("轮询采集") : "--"));
+  setText("harness-last-time", updated ? formatTime(updated) : (polled ? formatTime(polled) : t("尚未收到事件")));
 }
 
 async function saveBambu(event) {
@@ -1338,35 +1275,6 @@ async function updateModule(moduleId, enabled) {
     showToast(error.message || t("设置失败"));
   } finally {
     state.moduleSaving[moduleId] = false;
-    await refreshOverview();
-  }
-}
-
-async function saveCodexUi(codexUi) {
-  if (state.codexUiSaving) return;
-  state.codexUiSaving = true;
-  const previous = state.overview?.display_config?.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-  setText("codex-ui-state", t("正在保存"));
-  try {
-    const response = await fetch("/api/v1/admin/display", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codex_ui: codexUi }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || t("Codex 页面样式保存失败"));
-    const saved = result.display_config?.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-    setUiSelectValue("codex-ui", saved);
-    setText("codex-ui-state", saved === "dual_limit"
-      ? t("同时显示 5 小时和周剩余额度")
-      : t("仅显示周剩余额度"));
-    showToast(saved === "dual_limit" ? t("已显示 5 小时和周剩余额度") : t("已仅显示周剩余额度"));
-  } catch (error) {
-    setUiSelectValue("codex-ui", previous);
-    setText("codex-ui-state", t("保存失败，已恢复原选择"));
-    showToast(error.message || t("Codex 页面样式保存失败"));
-  } finally {
-    state.codexUiSaving = false;
     await refreshOverview();
   }
 }
@@ -1742,7 +1650,13 @@ async function persistCustom({ announce = true, previousEnabled = null } = {}) {
     state.customDirty = false;
     populateCustomForm(result.custom || custom);
     setText("custom-nav-state", custom.enabled ? t("已启用") : t("未启用"));
-    if (announce) showToast(custom.enabled ? t("自定义页面已启用并同步") : t("自定义页面已关闭，设备入口已隐藏"));
+    if (result.animation_removed) {
+      setText("custom-gif-state", t("原动画已备份为 custom-animation.gif.bak，可重新上传找回。"));
+    }
+    if (announce) {
+      if (result.animation_removed) showToast(t("已保存静态画面，原 GIF 动画已备份"));
+      else showToast(custom.enabled ? t("自定义页面已启用并同步") : t("自定义页面已关闭，设备入口已隐藏"));
+    }
   } catch (error) {
     if (previousEnabled !== null) {
       byId("custom-enabled").checked = previousEnabled;
@@ -1810,8 +1724,6 @@ byId("screen-off-page").addEventListener("change", () => {
   setText("display-save-state", t("有尚未保存的修改"));
 });
 byId("codex-enabled").addEventListener("change", (event) => updateModule("codex", event.target.checked));
-byId("codex-ui").addEventListener("change", (event) => saveCodexUi(event.target.value));
-byId("codex-check").addEventListener("click", checkCodex);
 byId("bambu-enabled").addEventListener("change", (event) => updateModule("bambu", event.target.checked));
 byId("dotii-enabled").addEventListener("change", (event) => updateModule("dotii", event.target.checked));
 byId("dotii-config-form").addEventListener("submit", saveDotiiConfig);

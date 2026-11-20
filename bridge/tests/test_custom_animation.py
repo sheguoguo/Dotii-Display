@@ -76,6 +76,20 @@ class CustomAnimationStoreTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             store.read_animation()
 
+    def test_backup_animation_moves_gif_aside(self) -> None:
+        store = self.store()
+        body = GIF_HEADER + b"\x00" * 16
+        store.write_animation(body)
+
+        self.assertTrue(store.backup_animation())
+
+        self.assertFalse(store.animation_info()["animation_available"])
+        backup = store.animation_path.with_name(store.animation_path.name + ".bak")
+        self.assertTrue(backup.is_file())
+        self.assertEqual(backup.read_bytes(), body)
+        # 没有动画时再备份一次应返回 False，且不产生多余文件。
+        self.assertFalse(store.backup_animation())
+
 
 if __name__ == "__main__":
     unittest.main()
